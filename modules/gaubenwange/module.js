@@ -40,7 +40,9 @@ export const EINGABEARTEN = {
 /** Vorgaben laut Festlegung mit Bastian (27.11.2026). */
 export const STANDARD = Object.freeze({
     regel: 'vonVorne',        // 'vonVorne' | 'gleichmaessig'
+    vorgabe: 'schar',         // 'schar' = Scharbreite (Achsmass) vorgeben | 'band' = Bandbreite vorgeben
     scharbreite: 520,         // Achsmass Falz zu Falz (netto)
+    bandbreite: 600,          // Blechband (Coil) für die Zuschnitte, bei vorgabe 'band'
     raster: 1,                // Falzachsen auf dieses Mass runden (mm), 0 = nicht runden
     minRest: 100,             // Restschar schmaler als das: Warnung
     zugabeFront: 45,          // Winkelstehfalz, Seite zur Gaubenfront
@@ -188,17 +190,32 @@ export const hoehe = (w, x) => w.H - x * w.d;
  */
 export function achsen(w, opt = {}) {
     const o = { ...STANDARD, ...opt };
-    const b = positiv(o.scharbreite, 'scharbreite', 'Scharbreite');
     const raster = nichtNegativ(o.raster, 'raster', 'Raster');
+    const { b, b1, bLetzte, bEinzige } = scharmasse(o);
     const runde = (x) => (raster > 0 ? Math.round(x / raster) * raster : x);
     const L = w.L;
-    const xs = [0];
+    let xs;
 
     if (o.regel === 'gleichmaessig') {
-        const n = Math.max(1, Math.ceil(L / b - 1e-9));
-        for (let i = 1; i < n; i++) xs.push(runde((i * L) / n));
+        // So viele Scharen, dass keine nach dem Runden breiter ist als erlaubt
+        // (erste Schar höchstens b1, alle anderen höchstens b).
+        for (let n = Math.max(1, Math.ceil(L / b - 1e-9)); ; n++) {
+            xs = [0];
+            for (let i = 1; i < n; i++) xs.push(runde((i * L) / n));
+            xs.push(L);
+            const zuBreit = xs.some((x, i) => i > 0 && x - xs[i - 1] > (i === 1 ? b1 : b) + 1e-6);
+            if (!zuBreit || n > 1000) break;
+        }
+        xs.pop();
     } else if (o.regel === 'vonVorne') {
-        for (let k = 1; k * b < L - 1e-6; k++) xs.push(runde(k * b));
+        // Neue Achse nur, solange der Rest nicht mehr in eine letzte Schar passt
+        // (die letzte Schar hat an der Spitze keinen Stehfalz und darf deshalb bei
+        // Vorgabe Bandbreite etwas breiter sein).
+        xs = [0];
+        for (let k = 0, vorher = 0; L - vorher > (k === 0 ? bEinzige : bLetzte) + 1e-6; k++) {
+            vorher = b1 + k * b;
+            xs.push(runde(vorher));
+        }
     } else {
         throw new GaubenFehler(`Unbekannte Einteilungsregel „${o.regel}“.`, 'regel');
     }
@@ -206,6 +223,39 @@ export function achsen(w, opt = {}) {
     while (xs.length > 1 && xs[xs.length - 1] >= L - 1e-6) xs.pop();
     xs.push(L);
     return xs;
+}
+
+/**
+ * Achsmasse aus der Vorgabe: b für alle Scharen, b1 für die erste.
+ * Vorgabe Scharbreite: b = b1 = Scharbreite.
+ * Vorgabe Bandbreite: das Band wird voll genutzt, also
+ *   b  = Band − Stehfalz Front − Stehfalz Spitze,
+ *   b1 = Band − Stehfalz erste Schar − Stehfalz Spitze (erste Schar hat den kleinen Falz),
+ *   bLetzte = Band − Stehfalz Front (letzte Schar hat an der Spitze keinen Stehfalz),
+ *   bEinzige = Band − Stehfalz erste Schar (nur eine Schar).
+ * Mit Raster werden b und b1 nach unten auf das Raster gerundet, damit kein Zuschnitt breiter als das Band wird.
+ */
+export function scharmasse(opt = {}) {
+    const o = { ...STANDARD, ...opt };
+    const raster = nichtNegativ(o.raster, 'raster', 'Raster');
+    if (o.vorgabe === 'band') {
+        const band = positiv(o.bandbreite, 'bandbreite', 'Bandbreite');
+        const zf = nichtNegativ(o.zugabeFront, 'zugabeFront', 'Stehfalz zur Front');
+        const zs = nichtNegativ(o.zugabeSpitze, 'zugabeSpitze', 'Stehfalz zur Spitze');
+        const ze = nichtNegativ(o.zugabeErsteFront, 'zugabeErsteFront', 'Erste Schar an der Ecke');
+        const ab = (x) => (raster > 0 ? Math.floor(x / raster + 1e-9) * raster : x);
+        const b = ab(band - zf - zs);
+        const b1 = ab(band - ze - zs);
+        if (b <= 0 || b1 <= 0) {
+            throw new GaubenFehler(`Bandbreite ${fmt(band, 0)} mm ist kleiner als die Stehfalz-Zugaben (${fmt(zf + zs, 0)} mm).`, 'bandbreite');
+        }
+        return { vorgabe: 'band', band, b, b1, bLetzte: ab(band - zf), bEinzige: ab(band - ze), zf, zs, ze };
+    }
+    if (o.vorgabe !== 'schar' && o.vorgabe !== undefined) {
+        throw new GaubenFehler(`Unbekannte Vorgabe „${o.vorgabe}“.`, 'vorgabe');
+    }
+    const b = positiv(o.scharbreite, 'scharbreite', 'Scharbreite');
+    return { vorgabe: 'schar', b, b1: b, bLetzte: b, bEinzige: b };
 }
 
 /** Scharen mit Nahtlängen netto (ohne Zugaben). */
@@ -354,7 +404,10 @@ export function rechne(eingabe, einstellungen = {}) {
     const letzte = liste[liste.length - 1];
     if (liste.length > 1 && letzte.breite < o.minRest - 1e-9) {
         const zusammen = letzte.breite + liste[liste.length - 2].breite;
-        warnungen.push(`Letzte Schar nur ${fmt(letzte.breite, 0)} mm breit (unter ${fmt(o.minRest, 0)} mm). Vorschlag: mit der vorletzten zusammenlegen (dann ${fmt(zusammen, 0)} mm) oder gleichmässig einteilen.`);
+        const passt = o.vorgabe !== 'band' || zusammen <= scharmasse(o).bLetzte + 1e-6;
+        warnungen.push(passt
+            ? `Letzte Schar nur ${fmt(letzte.breite, 0)} mm breit (unter ${fmt(o.minRest, 0)} mm). Vorschlag: mit der vorletzten zusammenlegen (dann ${fmt(zusammen, 0)} mm) oder gleichmässig einteilen.`
+            : `Letzte Schar nur ${fmt(letzte.breite, 0)} mm breit (unter ${fmt(o.minRest, 0)} mm). Zusammenlegen passt nicht aufs Band, Vorschlag: gleichmässig einteilen.`);
     }
 
     // Proben
@@ -368,6 +421,11 @@ export function rechne(eingabe, einstellungen = {}) {
     if (eingabe.eingabeart === 'laengen' || !eingabe.eingabeart) {
         probe('Unterkante zurückgerechnet = Aufmass', zahl(eingabe.su, 'su', 'Unterkante'), w.su, 1e-6);
         probe('Oberkante zurückgerechnet = Aufmass', zahl(eingabe.so, 'so', 'Oberkante'), w.so, 1e-6);
+    }
+    if (o.vorgabe === 'band') {
+        const band = Number(o.bandbreite);
+        const breitester = Math.max(...liste.map((s) => s.zuschnitt.breite));
+        probe(`Kein Zuschnitt breiter als das Band (${fmt(band, 0)} mm)`, 1, breitester <= band + 1e-6 ? 1 : 0);
     }
     for (const s of liste) {
         const z = s.zuschnitt;
@@ -419,6 +477,27 @@ const ZUGABEN = [
     ['minRest', 'Restschar mindestens', 'mm', 'Darunter kommt eine Warnung']
 ];
 
+/** Kurzinfo zur Vorgabe Bandbreite (leer bei Vorgabe Scharbreite). */
+const bandText = (r) => {
+    const o = r.einstellungen;
+    if (o.vorgabe !== 'band') return '';
+    const m = scharmasse(o);
+    return `Band ${fmt(m.band, 0)} mm: Achsmass ${fmt(m.b, 1)} mm, erste Schar ${fmt(m.b1, 1)} mm, letzte Schar höchstens ${fmt(m.bLetzte, 1)} mm.`;
+};
+
+/** Rechenweg-Zeilen zur Vorgabe Bandbreite. */
+const bandWeg = (r) => {
+    const o = r.einstellungen;
+    if (o.vorgabe !== 'band') return [];
+    const m = scharmasse(o);
+    const rund = Number(o.raster) > 0 ? `, abgerundet auf ${fmt(Number(o.raster), 1)} mm` : '';
+    return [
+        `Achsmass aus Band: ${fmt(m.band, 1)} − ${fmt(m.zf, 1)} − ${fmt(m.zs, 1)} = ${fmt(m.band - m.zf - m.zs, 1)} mm${rund} → ${fmt(m.b, 1)} mm`,
+        `Erste Schar: ${fmt(m.band, 1)} − ${fmt(m.ze, 1)} − ${fmt(m.zs, 1)} = ${fmt(m.band - m.ze - m.zs, 1)} mm${rund} → ${fmt(m.b1, 1)} mm`,
+        `Letzte Schar ohne Stehfalz an der Spitze: höchstens ${fmt(m.band, 1)} − ${fmt(m.zf, 1)} = ${fmt(m.bLetzte, 1)} mm`
+    ];
+};
+
 const leereDaten = (vorher) => ({
     v: 1,
     eingabe: {
@@ -429,7 +508,8 @@ const leereDaten = (vorher) => ({
     einstellungen: vorher && vorher.einstellungen
         ? { ...vorher.einstellungen }
         : {
-            regel: STANDARD.regel, scharbreite: String(STANDARD.scharbreite), raster: String(STANDARD.raster),
+            regel: STANDARD.regel, vorgabe: STANDARD.vorgabe, scharbreite: String(STANDARD.scharbreite),
+            bandbreite: String(STANDARD.bandbreite), raster: String(STANDARD.raster),
             minRest: String(STANDARD.minRest), zugabeFront: String(STANDARD.zugabeFront),
             zugabeSpitze: String(STANDARD.zugabeSpitze), zugabeErsteFront: String(STANDARD.zugabeErsteFront),
             querOben: String(STANDARD.querOben), querUnten: String(STANDARD.querUnten)
@@ -466,7 +546,7 @@ function rechneDaten(d) {
     }
     const o = {};
     for (const [k, v] of Object.entries(d.einstellungen)) {
-        if (k === 'regel') { o.regel = v; continue; }
+        if (k === 'regel' || k === 'vorgabe') { o[k] = v; continue; }
         if (leer(v)) continue;
         const z = Number(String(v).replace(',', '.'));
         if (!Number.isFinite(z)) return { fehler: `Einstellung „${k}“ ist keine Zahl.`, feld: k };
@@ -615,6 +695,7 @@ const STIL = `
 .gw-segment { display: flex; gap: 6px; flex-wrap: wrap; }
 .gw-segment button { flex: 1 1 0; min-height: 48px; min-width: 90px; padding: 8px 10px; font-size: 1rem; font-weight: bold; border: 2px solid #ced4da; background: #f8f9fa; color: #495057; border-radius: 8px; cursor: pointer; }
 .gw-segment button.aktiv { border-color: #16a085; background: #d5f5ee; color: #0e6655; }
+.gw-karte .gw-segment + .gw-segment { margin-top: 12px; }
 .gw-felder { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px 12px; margin-top: 10px; }
 .gw-feld label { display: block; font-weight: bold; font-size: .92rem; color: #495057; margin-bottom: 4px; }
 .gw-feld .gw-in { display: flex; align-items: center; border: 1px solid #ced4da; border-radius: 8px; background: #fff; }
@@ -678,7 +759,7 @@ const STIL = `
 export default {
     id: 'gaubenwange',
     name: 'Gaubenwange',
-    version: '0.2.0',
+    version: '0.3.0',
     apiVersion: 1,
     author: 'Bastian',
     description: 'Gaubenwangen (Schlepp-, Satteldach-, Flachdachgaube) aus dem Aufmass rechnen, in Scharen mit Winkelstehfalz einteilen und Zuschnittmasse je Schar ausgeben.',
@@ -768,7 +849,10 @@ export default {
             <div class="gw-karte">
                 <h3>Einteilung</h3>
                 ${segment('regel', [['vonVorne', 'Von vorne, Rest an der Spitze'], ['gleichmaessig', 'Gleichmässig']], o.regel)}
-                <div class="gw-felder">${feldHtml('einstellungen.scharbreite', 'scharbreite', { label: o.regel === 'gleichmaessig' ? 'Scharbreite höchstens' : 'Scharbreite', einheit: 'mm', hilfe: 'Achsmass Falz zu Falz' }, o.scharbreite)}</div>
+                ${segment('vorgabe', [['schar', 'Scharbreite vorgeben'], ['band', 'Bandbreite vorgeben']], o.vorgabe)}
+                <div class="gw-felder">${o.vorgabe === 'band'
+                    ? feldHtml('einstellungen.bandbreite', 'bandbreite', { label: 'Bandbreite', einheit: 'mm', hilfe: 'Coil-Breite, wird voll genutzt. Achsmass = Band − Stehfalz-Zugaben' }, o.bandbreite)
+                    : feldHtml('einstellungen.scharbreite', 'scharbreite', { label: o.regel === 'gleichmaessig' ? 'Scharbreite höchstens' : 'Scharbreite', einheit: 'mm', hilfe: 'Achsmass Falz zu Falz' }, o.scharbreite)}</div>
             </div>
             <div class="gw-karte">
                 <details>
@@ -819,6 +903,7 @@ export default {
                     <div class="gw-zahl"><b>${fmt(w.flaeche / 1e6, 2)}</b><span>Fläche je Wange m²</span></div>
                     <div class="gw-zahl"><b>${fmt(2 * zuschnittFlaeche / 1e6, 2)}</b><span>Blech beide Wangen m²</span></div>
                 </div>
+                ${bandText(r) ? `<p class="gw-hinweis">${esc(bandText(r))}</p>` : ''}
                 <div class="gw-leiste">
                     ${segment('seite', [['L', 'Linke Wange'], ['R', 'Rechte Wange']], a.seite)}
                     ${segment('reiter', [['gesamt', 'Ansicht'], ['tabelle', 'Masstabelle'], ['schar', 'Schar'], ['weg', 'Rechenweg']], a.reiter)}
@@ -879,7 +964,8 @@ export default {
                     `Nahtlänge an der Stelle x: h(x) = H − x · ${fmt(w.d, 5)}`,
                     `Querfalz oben senkrecht = ${fmt(z0.querOben, 1)} / cos ${fmt(w.beta, 2)}° = ${fmt(z0.querObenSenkrecht, 2)} mm`,
                     `Querfalz unten senkrecht = ${fmt(z0.querUnten, 1)} / cos ${fmt(w.alpha, 2)}° = ${fmt(z0.querUntenSenkrecht, 2)} mm`,
-                    `Versatz unten = Zuschnittbreite · tan α, Versatz oben = Zuschnittbreite · tan β`
+                    `Versatz unten = Zuschnittbreite · tan α, Versatz oben = Zuschnittbreite · tan β`,
+                    ...bandWeg(r)
                 ];
                 return `<div class="gw-weg">
                     <b>Rechenweg</b><ol>${zeilen.map((t) => `<li>${esc(t)}</li>`).join('')}</ol>
@@ -916,6 +1002,7 @@ export default {
                 switch (k.dataset.act) {
                     case 'art': daten.eingabe.art = wert; break;
                     case 'regel': daten.einstellungen.regel = wert; break;
+                    case 'vorgabe': daten.einstellungen.vorgabe = wert; break;
                     case 'seite': daten.ansicht.seite = wert; break;
                     case 'reiter': daten.ansicht.reiter = wert; break;
                     case 'stellen': daten.ansicht.stellen = Number(wert); break;
@@ -924,7 +1011,7 @@ export default {
                     default: return;
                 }
                 speichern();
-                if (k.dataset.act === 'art' || k.dataset.act === 'regel') zeigenNeu();
+                if (['art', 'regel', 'vorgabe'].includes(k.dataset.act)) zeigenNeu();
                 else ergebnisZeigen();
             });
         }

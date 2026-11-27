@@ -60,6 +60,21 @@
             "name": "H andere Zugaben (Schablone 46/38, Querfalz 20/12)",
             "eingabe": { "art": "schlepp", "eingabeart": "winkel", "H": 1100, "alpha": 42, "beta": 12 },
             "einstellungen": { "regel": "vonVorne", "scharbreite": 480, "zugabeFront": 46, "zugabeSpitze": 38, "zugabeErsteFront": 38, "querOben": 20, "querUnten": 12 }
+        },
+        {
+            "name": "I Referenz-Testgaube, Band 600 von vorne",
+            "eingabe": { "art": "schlepp", "eingabeart": "laengen", "H": 1200, "su": 4244, "so": 3500 },
+            "einstellungen": { "regel": "vonVorne", "vorgabe": "band", "bandbreite": 600 }
+        },
+        {
+            "name": "J Referenz-Testgaube, Band 670 gleichmässig",
+            "eingabe": { "art": "schlepp", "eingabeart": "laengen", "H": 1200, "su": 4244, "so": 3500 },
+            "einstellungen": { "regel": "gleichmaessig", "vorgabe": "band", "bandbreite": 670 }
+        },
+        {
+            "name": "K Schablone 46/38, Band 600, Raster 5, von vorne",
+            "eingabe": { "art": "sattel", "eingabeart": "winkel", "H": 1450, "alpha": 35, "beta": 0 },
+            "einstellungen": { "regel": "vonVorne", "vorgabe": "band", "bandbreite": 600, "zugabeFront": 46, "zugabeSpitze": 38, "raster": 5 }
         }
     ]
 }

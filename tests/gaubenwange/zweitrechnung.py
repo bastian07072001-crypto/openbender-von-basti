@@ -17,7 +17,7 @@ import os
 HIER = os.path.dirname(os.path.abspath(__file__))
 
 STANDARD = {
-    "regel": "vonVorne", "scharbreite": 520, "raster": 1, "minRest": 100,
+    "regel": "vonVorne", "vorgabe": "schar", "scharbreite": 520, "bandbreite": 600, "raster": 1, "minRest": 100,
     "zugabeFront": 45, "zugabeSpitze": 35, "zugabeErsteFront": 35,
     "querOben": 15, "querUnten": 15,
 }
@@ -53,19 +53,40 @@ def spitze(e):
     raise ValueError(art)
 
 
+def achsmasse(o):
+    """Erlaubte Achsmasse: erste, übrige, letzte und einzige Schar.
+    Bei Vorgabe Bandbreite: Band minus die Stehfalz-Zugaben der jeweiligen Schar
+    (an der Spitze hat die letzte Schar keinen), auf das Raster abgerundet."""
+    if o.get("vorgabe") == "band":
+        r = o["raster"]
+        ab = (lambda x: math.floor(x / r + 1e-9) * r) if r > 0 else (lambda x: x)
+        B, zf, zs, ze = o["bandbreite"], o["zugabeFront"], o["zugabeSpitze"], o["zugabeErsteFront"]
+        return ab(B - ze - zs), ab(B - zf - zs), ab(B - zf), ab(B - ze)
+    b = o["scharbreite"]
+    return b, b, b, b
+
+
 def achsen(L, o):
-    b, raster = o["scharbreite"], o["raster"]
+    b1, b, b_letzte, b_einzige = achsmasse(o)
+    raster = o["raster"]
     # kaufmännisch runden wie Math.round in JS (Python-round rundet .5 zur geraden Zahl)
     runde = (lambda x: math.floor(x / raster + 0.5) * raster) if raster > 0 else (lambda x: x)
-    xs = [0.0]
     if o["regel"] == "gleichmaessig":
         n = max(1, math.ceil(L / b - 1e-9))
-        xs += [runde(i * L / n) for i in range(1, n)]
+        while True:
+            xs = [0.0] + [runde(i * L / n) for i in range(1, n)] + [L]
+            breiten = [xs[i + 1] - xs[i] for i in range(n)]
+            grenzen = [b1] + [b] * (n - 1)
+            if all(w <= g + 1e-6 for w, g in zip(breiten, grenzen)):
+                break
+            n += 1
+        xs = xs[:-1]
     else:
-        k = 1
-        while k * b < L - 1e-6:
-            xs.append(runde(k * b))
-            k += 1
+        # Breiten aufsummieren: erste b1, dann je b, bis der Rest in die letzte Schar passt
+        xs, x = [0.0], 0.0
+        while L - x > (b_einzige if x == 0 else b_letzte) + 1e-6:
+            x = b1 if x == 0 else x + b
+            xs.append(runde(x))
     while len(xs) > 1 and xs[-1] >= L - 1e-6:
         xs.pop()
     xs.append(L)
