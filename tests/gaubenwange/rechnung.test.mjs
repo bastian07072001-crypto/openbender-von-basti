@@ -181,3 +181,48 @@ test('Rechte Wange ist das Spiegelbild der linken', () => {
         assert.ok(flaeche(l.kontur) > 0 && flaeche(rw.kontur) > 0, 'beide Konturen gegen den Uhrzeigersinn');
     }
 });
+
+// --- 8. Vorgabe Bandbreite ---------------------------------------------------
+
+const REF = { eingabeart: 'laengen', H: 1200, su: 4244, so: 3500 };
+
+test('Bandbreite 600: Band voll genutzt, erste Schar 530, übrige 520 Achsmass', () => {
+    const r = rechne(REF, { vorgabe: 'band', bandbreite: 600 });
+    assert.equal(r.scharen[0].breite, 530);                    // 600 − 35 − 35
+    for (const s of r.scharen.slice(1, -1)) assert.equal(s.breite, 520);  // 600 − 45 − 35
+    for (const s of r.scharen.slice(0, -1)) nah(s.zuschnitt.breite, 600, 1e-9, `Zuschnitt Schar ${s.nr}`);
+    assert.ok(r.ok);
+});
+
+test('Bandbreite: kein Zuschnitt breiter als das Band (viele Gauben, beide Regeln, mit Raster)', () => {
+    let n = 0;
+    for (const H of [400, 950, 1475]) for (const alpha of [25, 38, 52]) for (const beta of [0, 8, 18]) {
+        if (beta >= alpha - 3) continue;
+        for (const band of [500, 600, 670, 1000]) for (const regel of ['vonVorne', 'gleichmaessig']) for (const raster of [0, 1, 5]) {
+            const r = rechne({ eingabeart: 'winkel', H, alpha, beta }, { vorgabe: 'band', bandbreite: band, regel, raster, zugabeFront: 46, zugabeSpitze: 38 });
+            for (const s of r.scharen) assert.ok(s.zuschnitt.breite <= band + 1e-6, `H ${H} α ${alpha} β ${beta} Band ${band} ${regel} Raster ${raster}: Schar ${s.nr} ${s.zuschnitt.breite}`);
+            nah(r.scharen.reduce((t, s) => t + s.breite, 0), r.wange.L, 1e-6, 'Summe = L');
+            assert.ok(r.ok);
+            n++;
+        }
+    }
+    assert.ok(n > 100);
+});
+
+test('Bandbreite: letzte Schar darf ohne Stehfalz an der Spitze breiter sein, statt einen Reststreifen zu lassen', () => {
+    const r = rechne({ eingabeart: 'winkel', art: 'sattel', H: 1450, alpha: 35, beta: 0 },
+        { vorgabe: 'band', bandbreite: 600, zugabeFront: 46, zugabeSpitze: 38, raster: 5 });
+    const letzte = r.scharen[r.scharen.length - 1];
+    assert.ok(letzte.breite > 515 && letzte.breite <= 600 - 46);
+    assert.equal(r.warnungen.length, 0);
+});
+
+test('Bandbreite zu schmal für die Zugaben: Fehler am Feld Bandbreite', () => {
+    assert.throws(() => rechne(REF, { vorgabe: 'band', bandbreite: 70 }), (f) => f instanceof GaubenFehler && f.feld === 'bandbreite');
+});
+
+test('Vorgabe Scharbreite rechnet wie bisher', () => {
+    const a = rechne(REF, { scharbreite: 520 }), b = rechne(REF, { vorgabe: 'schar', scharbreite: 520 });
+    assert.deepEqual(a.scharen.map((s) => s.breite), b.scharen.map((s) => s.breite));
+    assert.deepEqual(a.scharen.slice(0, -1).map((s) => s.breite), [520, 520, 520, 520, 520]);
+});
