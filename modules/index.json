@@ -4,6 +4,11 @@
             "id": "beispiel",
             "file": "beispiel/module.js",
             "default": false
+        },
+        {
+            "id": "gaubenwange",
+            "file": "gaubenwange/module.js",
+            "default": true
         }
     ]
 }
