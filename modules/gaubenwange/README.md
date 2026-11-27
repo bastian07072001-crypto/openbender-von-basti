@@ -2,7 +2,7 @@
 
 Rechner für Gaubenwangen (Schlepp-, Satteldach- und Flachdachgaube): Wangendreieck aus dem Aufmass, Einteilung in senkrechte Scharen mit Winkelstehfalz, Zuschnittmasse mit Falz- und Querfalzzugaben, linke und gespiegelte rechte Wange.
 
-**Stand: Etappe 2 – Rechenkern und Oberfläche, dazu Vorgabe Bandbreite.** Das Modul ist in `modules/index.json` eingetragen und standardmässig eingeschaltet. Bei „Neu“ und „+ Neues Ausmass“ gibt es die Art „Gaubenwange“ mit eigenem Tab: Eingabe, Gesamtansicht, Masstabelle, Zuschnitt je Schar, Rechenweg mit Proben, linke und rechte Wange. PDF und DXF folgen in Etappe 4 und 5.
+**Stand: Etappe 4 – Rechenkern, Oberfläche, Vorgabe Bandbreite und PDF.** Das Modul ist in `modules/index.json` eingetragen und standardmässig eingeschaltet. Bei „Neu“ und „+ Neues Ausmass“ gibt es die Art „Gaubenwange“ mit eigenem Tab: Eingabe, Gesamtansicht, Masstabelle, Zuschnitt je Schar, Rechenweg mit Proben, linke und rechte Wange. Der Knopf **PDF** gibt bei einer Gaube aus: Übersicht (Kopf, Aufmass, Einteilung, Zugaben, Kennzahlen, Gesamtskizze, Masstabelle, Prüfung), Zuschnittskizzen mit Massliste (4 Scharen je A4-Seite, linke, rechte oder beide Wangen) und auf Wunsch den Rechenweg mit Proben. DXF folgt in Etappe 5.
 
 ## Prüfen
 
@@ -18,7 +18,13 @@ Wurde `tests/gaubenwange/faelle.json` geändert, vorher die unabhängige Zweitre
 python3 tests/gaubenwange/zweitrechnung.py
 ```
 
-Die Tests prüfen jeden Fall gegen die Python-Zweitrechnung (anderer Rechenweg, Toleranz 0,001 mm), gegen die Handrechnung aus dem Plan und gegen die Zahlen der SpenglerTV-Testgaube.
+Prüfung des PDFs (liest die Zahlen aus dem erzeugten PDF und vergleicht sie mit der Rechnung, braucht einmalig `npm install --no-save jspdf@2.5.1`):
+
+```
+node --test tests/gaubenwange/pdf.test.mjs
+```
+
+Die Rechentests prüfen jeden Fall gegen die Python-Zweitrechnung (anderer Rechenweg, Toleranz 0,001 mm), gegen die Handrechnung aus dem Plan und gegen die Zahlen der SpenglerTV-Testgaube.
 
 ## Festlegungen (Bastian, 27.11.2026)
 
