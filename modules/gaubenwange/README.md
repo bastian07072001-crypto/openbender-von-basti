@@ -27,3 +27,4 @@ Die Tests prüfen jeden Fall gegen die Python-Zweitrechnung (anderer Rechenweg, 
 - Querfalz oben und unten je 15 mm, rechtwinklig zur Schnittkante (senkrecht also 15 / cos)
 - Scharbreite = Achsmass Falz zu Falz; Einteilung gleichmässig oder von vorne
 - Restschar unter 100 mm Breite: Warnung
+- Letzte Schar an der Spitze senkrecht abgeschnitten, hintere Kante = beide Querfalz-Zugaben; nach dem Umlegen läuft sie auf 0 aus

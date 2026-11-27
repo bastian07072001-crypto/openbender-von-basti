@@ -238,7 +238,8 @@ export function scharen(w, opt = {}) {
  * Seitlich: Winkelstehfalz, zur Gaubenfront `zugabeFront` (erste Schar
  * `zugabeErsteFront`), zur Spitze `zugabeSpitze`. Die letzte Schar hat an der
  * Spitze keinen Stehfalz; sie wird dort senkrecht abgeschnitten, ihre rechte
- * Kante besteht nur aus den beiden Querfalz-Zugaben (Annahme, mit Bastian zu klären).
+ * Kante besteht nur aus den beiden Querfalz-Zugaben. Nach dem Umlegen der Querfalze
+ * läuft die Schar hinten genau auf 0 aus (bestätigt von Bastian, 27.11.2026).
  * Oben/unten: Querfalz rechtwinklig zur Schnittkante gemessen; senkrecht ist die
  * Zugabe deshalb querOben / cos β bzw. querUnten / cos α.
  *
