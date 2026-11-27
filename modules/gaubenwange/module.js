@@ -371,7 +371,7 @@ export function rechne(eingabe, einstellungen = {}) {
     }
     for (const s of liste) {
         const z = s.zuschnitt;
-        if (!z.spitz) probe(`Schar ${s.nr}: Höhe links − rechts = Breite · (tan α − tan β)`, z.breite * w.d, z.hoeheLinks - z.hoeheRechts, 1e-6);
+        if (!z.spitz) probe(`Schar ${s.nr}: Zuschnitthöhe vorne − hinten = Breite · (tan α − tan β)`, z.breite * w.d, z.hoeheLinks - z.hoeheRechts, 1e-6);
     }
 
     return {
@@ -385,3 +385,555 @@ export function rechne(eingabe, einstellungen = {}) {
         ok: proben.every((p) => p.ok)
     };
 }
+
+// =============================================================================
+// Oberfläche (Etappe 2): Ausmass-Art „Gaubenwange“ mit eigenem Tab
+// =============================================================================
+
+const FELDER = {
+    H: { label: 'Höhe vorne', einheit: 'mm', hilfe: 'Fertige Nahtlänge an der Gaubenfront' },
+    su: { label: 'Unterkante', einheit: 'mm', hilfe: 'Entlang Hauptdach, fertig' },
+    so: { label: 'Oberkante', einheit: 'mm', hilfe: 'Entlang Gaubendach, fertig' },
+    alpha: { label: 'Dachneigung α', einheit: '°', hilfe: 'Hauptdach' },
+    beta: { label: 'Gaubenneigung β', einheit: '°', hilfe: 'Gaubendach, Satteldach = 0' },
+    L: { label: 'Waagrechte Tiefe', einheit: 'mm', hilfe: 'Front bis Spitze, waagrecht' },
+    schmiege: { label: 'Winkel unten', einheit: '°', hilfe: 'Zwischen Front und Hauptdach' }
+};
+
+const FELDER_JE_ART = {
+    laengen: ['H', 'su', 'so'],
+    winkel: ['H', 'alpha', 'beta'],
+    tiefe: ['H', 'L', 'alpha'],
+    referenz: ['H', 'so', 'schmiege']
+};
+
+const KONTROLLE = ['alpha', 'beta', 'su', 'so', 'L'];
+
+const ZUGABEN = [
+    ['zugabeFront', 'Stehfalz zur Front', 'mm', 'Alle Scharen ausser der ersten'],
+    ['zugabeSpitze', 'Stehfalz zur Spitze', 'mm', ''],
+    ['zugabeErsteFront', 'Erste Schar an der Ecke', 'mm', 'Kleiner Falz an der Gaubenecke'],
+    ['querOben', 'Querfalz oben', 'mm', 'Rechtwinklig zur Schnittkante'],
+    ['querUnten', 'Querfalz unten', 'mm', 'Rechtwinklig zur Schnittkante'],
+    ['raster', 'Falzachsen runden auf', 'mm', '0 = nicht runden'],
+    ['minRest', 'Restschar mindestens', 'mm', 'Darunter kommt eine Warnung']
+];
+
+const leereDaten = (vorher) => ({
+    v: 1,
+    eingabe: {
+        art: 'schlepp', eingabeart: 'laengen',
+        H: '', su: '', so: '', alpha: '', beta: '', L: '', schmiege: '',
+        kontrolle: { alpha: '', beta: '', su: '', so: '', L: '' }
+    },
+    einstellungen: vorher && vorher.einstellungen
+        ? { ...vorher.einstellungen }
+        : {
+            regel: STANDARD.regel, scharbreite: String(STANDARD.scharbreite), raster: String(STANDARD.raster),
+            minRest: String(STANDARD.minRest), zugabeFront: String(STANDARD.zugabeFront),
+            zugabeSpitze: String(STANDARD.zugabeSpitze), zugabeErsteFront: String(STANDARD.zugabeErsteFront),
+            querOben: String(STANDARD.querOben), querUnten: String(STANDARD.querUnten)
+        },
+    ansicht: { seite: 'L', stellen: 0, reiter: 'gesamt', schar: 1 }
+});
+
+/** Gespeicherte Daten auf den aktuellen Aufbau bringen (fehlende Felder ergänzen). */
+const vervollstaendige = (d) => {
+    const leer = leereDaten();
+    if (!d || typeof d !== 'object') return leer;
+    return {
+        v: 1,
+        eingabe: { ...leer.eingabe, ...(d.eingabe || {}), kontrolle: { ...leer.eingabe.kontrolle, ...((d.eingabe || {}).kontrolle || {}) } },
+        einstellungen: { ...leer.einstellungen, ...(d.einstellungen || {}) },
+        ansicht: { ...leer.ansicht, ...(d.ansicht || {}) }
+    };
+};
+
+const leer = (v) => v === undefined || v === null || String(v).trim() === '';
+
+/** Rechnung aus den gespeicherten (Text-)Feldern; liefert { r } oder { fehler, feld }. */
+function rechneDaten(d) {
+    const e = d.eingabe;
+    const eingabe = { art: e.art, eingabeart: e.eingabeart, kontrolle: {} };
+    const fehlend = [];
+    for (const k of FELDER_JE_ART[e.eingabeart] || []) {
+        if (leer(e[k])) fehlend.push(FELDER[k].label);
+        eingabe[k] = e[k];
+    }
+    if (fehlend.length) return { fehlt: fehlend };
+    for (const k of KONTROLLE) {
+        if (!leer(e.kontrolle[k]) && !(FELDER_JE_ART[e.eingabeart] || []).includes(k)) eingabe.kontrolle[k] = e.kontrolle[k];
+    }
+    const o = {};
+    for (const [k, v] of Object.entries(d.einstellungen)) {
+        if (k === 'regel') { o.regel = v; continue; }
+        if (leer(v)) continue;
+        const z = Number(String(v).replace(',', '.'));
+        if (!Number.isFinite(z)) return { fehler: `Einstellung „${k}“ ist keine Zahl.`, feld: k };
+        o[k] = z;
+    }
+    try {
+        return { r: rechne(eingabe, o) };
+    } catch (f) {
+        if (f instanceof GaubenFehler) return { fehler: f.message, feld: f.feld };
+        throw f;
+    }
+}
+
+// --- Zeichnungen (SVG) ------------------------------------------------------
+
+const svgEsc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const n2 = (z) => Math.round(z * 100) / 100;
+
+/** Gesamtansicht der Wange mit Falzachsen, Nahtlängen und Masskette. */
+function svgGesamt(r, seite, stellen) {
+    const w = r.wange;
+    const f = (z) => fmt(z, stellen);
+    const span = Math.max(w.L, w.yS);
+    const schmal = typeof window !== 'undefined' && window.innerWidth < 600;
+    const fs = span / (schmal ? 21 : 30);
+    const m = fs * 3.2;
+    const R = seite === 'R';
+    const X = (x) => n2(R ? w.L - x : x);
+    const Y = (y) => n2(w.yS - y);
+    const teile = [];
+    const txt = (x, y, t, opt = {}) => teile.push(
+        `<text x="${n2(x)}" y="${n2(y)}" font-size="${n2(opt.fs || fs)}" text-anchor="${opt.anchor || 'middle'}"` +
+        `${opt.rot ? ` transform="rotate(${n2(opt.rot)} ${n2(x)} ${n2(y)})"` : ''}` +
+        ` fill="${opt.farbe || '#2c3e50'}"${opt.fett ? ' font-weight="bold"' : ''}>${svgEsc(t)}</text>`);
+    const linie = (x1, y1, x2, y2, opt = {}) => teile.push(
+        `<line x1="${n2(x1)}" y1="${n2(y1)}" x2="${n2(x2)}" y2="${n2(y2)}" stroke="${opt.farbe || '#2c3e50'}" stroke-width="${n2(opt.b || fs / 10)}"${opt.strich ? ` stroke-dasharray="${n2(fs / 2)} ${n2(fs / 3)}"` : ''}/>`);
+
+    // Wange
+    teile.push(`<polygon points="${X(0)},${Y(0)} ${X(0)},${Y(w.H)} ${X(w.L)},${Y(w.yS)}" fill="#d5f5ee" stroke="#16a085" stroke-width="${n2(fs / 6)}" stroke-linejoin="round"/>`);
+
+    // Falzachsen mit Nahtlänge, Positionsnummern
+    r.scharen.forEach((s, i) => {
+        if (i > 0) {
+            linie(X(s.x0), Y(s.x0 * w.tanA), X(s.x0), Y(w.H + s.x0 * w.tanB), { farbe: '#2471a3', strich: true, b: fs / 12 });
+        }
+        if (i > 0 && s.h0 > fs * 2.2) {
+            txt(X(s.x0) + (R ? -1 : 1) * fs * 0.9, Y(s.x0 * w.tanA + s.h0 / 2), f(s.h0), { rot: -90, farbe: '#d35400', fs: fs * 0.85 });
+        }
+        const xm = (s.x0 + s.x1) / 2;
+        const ym = xm * w.tanA + (s.h0 + s.h1) / 4;
+        if (s.breite > fs * 2.4 && (s.h0 + s.h1) / 2 > fs * 1.5) txt(X(xm), Y(ym) + fs * 0.35, `${seite}${s.nr}`, { fett: true });
+    });
+
+    // Masskette unten (Achsmasse)
+    const yK = Y(0) + m * 0.55;
+    linie(X(0), yK, X(w.L), yK, { farbe: '#2471a3' });
+    r.scharen.forEach((s) => {
+        linie(X(s.x0), yK - fs * 0.4, X(s.x0), yK + fs * 0.4, { farbe: '#2471a3' });
+        if (s.breite > fs * 2) txt(X((s.x0 + s.x1) / 2), yK - fs * 0.35, f(s.breite), { farbe: '#2471a3', fs: fs * 0.85 });
+    });
+    linie(X(w.L), yK - fs * 0.4, X(w.L), yK + fs * 0.4, { farbe: '#2471a3' });
+    txt(X(w.L / 2), yK + fs * 1.4, `L = ${f(w.L)} mm waagrecht`, { farbe: '#2471a3', fs: fs * 0.85 });
+
+    // Höhe vorne
+    const xH = X(0) + (R ? 1 : -1) * m * 0.55;
+    linie(xH, Y(0), xH, Y(w.H), { farbe: '#d35400' });
+    linie(xH - fs * 0.4, Y(0), xH + fs * 0.4, Y(0), { farbe: '#d35400' });
+    linie(xH - fs * 0.4, Y(w.H), xH + fs * 0.4, Y(w.H), { farbe: '#d35400' });
+    txt(xH + (R ? 1 : -1) * fs * 0.5, Y(w.H / 2), `H ${f(w.H)}`, { rot: -90, farbe: '#d35400', fett: true });
+
+    // Kanten
+    const rotU = (R ? 1 : -1) * w.alpha;
+    const rotO = (R ? 1 : -1) * w.beta;
+    const nu = { x: Math.sin(w.alpha * RAD), y: -Math.cos(w.alpha * RAD) };
+    const no = { x: -Math.sin(w.beta * RAD), y: Math.cos(w.beta * RAD) };
+    const mu = { x: w.L * 0.55, y: w.L * 0.55 * w.tanA };
+    const mo = { x: w.L * 0.45, y: w.H + w.L * 0.45 * w.tanB };
+    txt(X(mu.x + nu.x * fs * 1.6), Y(mu.y + nu.y * fs * 1.6), `Unterkante ${f(w.su)}`, { rot: rotU, farbe: '#16a085' });
+    txt(X(mo.x + no.x * fs * 0.9), Y(mo.y + no.y * fs * 0.9), `Oberkante ${f(w.so)}`, { rot: rotO, farbe: '#16a085' });
+
+    // Winkel
+    txt(X(0) + (R ? -1 : 1) * fs * 0.6, Y(0) + fs * 0.9, `${fmt(w.winkelUnten, 1)}°`, { anchor: R ? 'end' : 'start', fs: fs * 0.8, farbe: '#7f8c8d' });
+    txt(X(0) + (R ? -1 : 1) * fs * 0.6, Y(w.H) + fs * 1.6, `${fmt(w.winkelOben, 1)}°`, { anchor: R ? 'end' : 'start', fs: fs * 0.8, farbe: '#7f8c8d' });
+    txt(X(w.L) + (R ? -1 : 1) * fs * 0.6, Y(w.yS) - fs * 0.4, `${fmt(w.winkelSpitze, 1)}°`, { anchor: R ? 'end' : 'start', fs: fs * 0.8, farbe: '#7f8c8d' });
+
+    const vb = [-m * 1.25, -m * 0.7, w.L + m * 2.5, w.yS + m * 1.7].map(n2).join(' ');
+    return `<svg class="gw-svg" viewBox="${vb}" role="img" aria-label="Gesamtansicht ${seite === 'R' ? 'rechte' : 'linke'} Wange">${teile.join('')}</svg>`;
+}
+
+/** Zuschnitt einer Schar mit Biegelinien und Massen. */
+function svgSchar(z, pos, stellen) {
+    const f = (v) => fmt(v, stellen);
+    const vmax = Math.max(...z.kontur.map((p) => p.v));
+    const span = Math.max(z.breite, vmax);
+    const fs = span / (typeof window !== 'undefined' && window.innerWidth < 600 ? 16 : 22);
+    const m = fs * 3.4;
+    const X = (u) => n2(u);
+    const Y = (v) => n2(vmax - v);
+    const teile = [];
+    const txt = (x, y, t, opt = {}) => teile.push(
+        `<text x="${n2(x)}" y="${n2(y)}" font-size="${n2(opt.fs || fs)}" text-anchor="${opt.anchor || 'middle'}"` +
+        `${opt.rot ? ` transform="rotate(${n2(opt.rot)} ${n2(x)} ${n2(y)})"` : ''} fill="${opt.farbe || '#2c3e50'}"${opt.fett ? ' font-weight="bold"' : ''}>${svgEsc(t)}</text>`);
+    const linie = (a, b, opt = {}) => teile.push(
+        `<line x1="${X(a.u)}" y1="${Y(a.v)}" x2="${X(b.u)}" y2="${Y(b.v)}" stroke="${opt.farbe || '#2c3e50'}" stroke-width="${n2(opt.b || fs / 10)}"${opt.strich ? ` stroke-dasharray="${n2(fs / 2)} ${n2(fs / 3)}"` : ''}/>`);
+
+    teile.push(`<polygon points="${z.kontur.map((p) => `${X(p.u)},${Y(p.v)}`).join(' ')}" fill="#eef2f7" stroke="#2c3e50" stroke-width="${n2(fs / 7)}" stroke-linejoin="round"/>`);
+    z.biegen.forEach((l) => linie(l.a, l.b, { farbe: '#c0392b', strich: true, b: fs / 14 }));
+
+    const links = z.kontur.filter((p) => p.u < z.breite / 2);
+    const rechts = z.kontur.filter((p) => p.u >= z.breite / 2);
+    const lo = Math.max(...links.map((p) => p.v)), lu = Math.min(...links.map((p) => p.v));
+    const ro = Math.max(...rechts.map((p) => p.v)), ru = Math.min(...rechts.map((p) => p.v));
+    const lx = Math.min(...links.map((p) => p.u)), rx = Math.max(...rechts.map((p) => p.u));
+
+    // Breite unten
+    const yB = Y(Math.min(lu, ru)) + m * 0.85;
+    teile.push(`<line x1="${X(lx)}" y1="${n2(yB)}" x2="${X(rx)}" y2="${n2(yB)}" stroke="#2471a3" stroke-width="${n2(fs / 10)}"/>`);
+    txt((X(lx) + X(rx)) / 2, yB + fs * 1.2, `Breite ${f(z.breite)}`, { farbe: '#2471a3', fett: true });
+    // Höhen links und rechts
+    txt(X(lx) - fs * 0.5, (Y(lo) + Y(lu)) / 2 + fs * 0.35, `${f(lo - lu)}`, { anchor: 'end', farbe: '#d35400', fett: true });
+    txt(X(rx) + fs * 0.5, (Y(ro) + Y(ru)) / 2 + fs * 0.35, `${f(ro - ru)}`, { anchor: 'start', farbe: '#d35400', fett: true });
+    // Versatz
+    txt((X(lx) + X(rx)) / 2, Y(Math.min(lu, ru)) + m * 0.35, `Versatz unten ${f(z.versatzUnten)}`, { fs: fs * 0.8, farbe: '#7f8c8d' });
+    txt((X(lx) + X(rx)) / 2, Y(Math.max(lo, ro)) - fs * 0.6, `Versatz oben ${f(z.versatzOben)}`, { fs: fs * 0.8, farbe: '#7f8c8d' });
+    txt((X(lx) + X(rx)) / 2, (Y(lo) + Y(lu) + Y(ro) + Y(ru)) / 4 + fs * 0.4, pos, { fs: fs * 1.6, fett: true, farbe: '#16a085' });
+
+    const vb = [-m * 1.6, -m * 0.6, z.breite + m * 3.2, vmax + m * 1.7].map(n2).join(' ');
+    return `<svg class="gw-svg" viewBox="${vb}" role="img" aria-label="Zuschnitt ${svgEsc(pos)}">${teile.join('')}</svg>`;
+}
+
+function vorschauSvg(r) {
+    const w = r.wange;
+    const s = 56 / Math.max(w.L, w.yS);
+    const p = (x, y) => `${n2(4 + x * s)},${n2(60 - y * s)}`;
+    const achsen = r.scharen.slice(1).map((sc) => `<line x1="${n2(4 + sc.x0 * s)}" y1="${n2(60 - sc.x0 * w.tanA * s)}" x2="${n2(4 + sc.x0 * s)}" y2="${n2(60 - (w.H + sc.x0 * w.tanB) * s)}" stroke="#2471a3" stroke-width="1"/>`).join('');
+    return `<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg"><polygon points="${p(0, 0)} ${p(0, w.H)} ${p(w.L, w.yS)}" fill="#d5f5ee" stroke="#16a085" stroke-width="2" stroke-linejoin="round"/>${achsen}</svg>`;
+}
+
+// --- Stil -----------------------------------------------------------------
+
+const STIL = `
+.gw { display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); gap: 20px; align-items: start; color: #2c3e50; }
+.gw * { box-sizing: border-box; }
+.gw-karte { background: #fff; border: 1px solid #e3e7eb; border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+.gw-karte h3 { margin: 0 0 10px; font-size: 1rem; text-transform: uppercase; letter-spacing: .03em; color: #34495e; }
+.gw-segment { display: flex; gap: 6px; flex-wrap: wrap; }
+.gw-segment button { flex: 1 1 0; min-height: 48px; min-width: 90px; padding: 8px 10px; font-size: 1rem; font-weight: bold; border: 2px solid #ced4da; background: #f8f9fa; color: #495057; border-radius: 8px; cursor: pointer; }
+.gw-segment button.aktiv { border-color: #16a085; background: #d5f5ee; color: #0e6655; }
+.gw-felder { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px 12px; margin-top: 10px; }
+.gw-feld label { display: block; font-weight: bold; font-size: .92rem; color: #495057; margin-bottom: 4px; }
+.gw-feld .gw-in { display: flex; align-items: center; border: 1px solid #ced4da; border-radius: 8px; background: #fff; }
+.gw-feld .gw-in:focus-within { border-color: #16a085; box-shadow: 0 0 0 2px #a3e4d7; }
+.gw-feld input:focus, .gw-feld select:focus { outline: none; }
+.gw-feld input, .gw-feld select { width: 100%; min-height: 48px; padding: 8px 10px; font-size: 1.15rem; border: none; border-radius: 8px; background: transparent; text-align: right; }
+.gw-feld select { text-align: left; font-size: 1rem; }
+.gw-feld .gw-einh { padding: 0 10px 0 2px; color: #7f8c8d; }
+.gw-feld small { display: block; color: #7f8c8d; font-size: .8rem; margin-top: 3px; }
+.gw-feld.gw-falsch .gw-in { border-color: #c0392b; box-shadow: 0 0 0 2px #f5b7b1; }
+.gw-hinweis { color: #7f8c8d; font-size: .88rem; margin: 6px 0 0; }
+.gw details summary { cursor: pointer; font-weight: bold; min-height: 40px; display: flex; align-items: center; color: #34495e; }
+.gw-meldung { border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; font-size: 1rem; }
+.gw-meldung.fehler { background: #fdedec; color: #922b21; border: 1px solid #f5b7b1; }
+.gw-meldung.warnung { background: #fef5e7; color: #935116; border: 1px solid #f8c471; }
+.gw-meldung.leer { background: #eaf2f8; color: #1f618d; border: 1px solid #aed6f1; }
+.gw-meldung ul { margin: 0; padding-left: 20px; }
+.gw-zahlen { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.gw-zahl { background: #fff; border: 1px solid #e3e7eb; border-radius: 10px; padding: 10px 12px; }
+.gw-zahl b { display: block; font-size: 1.35rem; color: #16a085; }
+.gw-zahl span { font-size: .8rem; color: #7f8c8d; }
+.gw-leiste { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.gw-leiste .gw-segment { flex-wrap: nowrap; }
+.gw-leiste .gw-segment button { min-width: 0; padding: 8px 4px; }
+.gw-svg { width: 100%; height: auto; max-height: 70vh; display: block; background: #fff; border-radius: 10px; border: 1px solid #e3e7eb; font-family: inherit; }
+.gw-tabelle-rahmen { overflow-x: auto; background: #fff; border: 1px solid #e3e7eb; border-radius: 10px; }
+.gw-tabelle { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.gw-tabelle th, .gw-tabelle td { padding: 12px 10px; text-align: right; border-bottom: 1px solid #eef0f2; white-space: nowrap; }
+.gw-tabelle th { background: #f1f3f5; font-size: .8rem; color: #495057; line-height: 1.25; }
+.gw-tabelle td:first-child, .gw-tabelle th:first-child { text-align: left; font-weight: bold; }
+.gw-tabelle tbody tr { cursor: pointer; }
+.gw-tabelle tbody tr:hover { background: #f4fbf9; }
+.gw-tabelle tfoot td { font-weight: bold; background: #f8f9fa; }
+.gw-schar-kopf { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.gw-schar-kopf button { min-width: 56px; min-height: 48px; font-size: 1.4rem; border: 2px solid #ced4da; background: #f8f9fa; border-radius: 8px; cursor: pointer; }
+.gw-schar-kopf button:disabled { opacity: .35; cursor: default; }
+.gw-schar-kopf strong { flex: 1; text-align: center; font-size: 1.3rem; }
+.gw-schar-masse { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 12px; }
+.gw-schar-masse div { background: #fff; border: 1px solid #e3e7eb; border-radius: 8px; padding: 8px 12px; }
+.gw-schar-masse b { display: block; font-size: 1.5rem; }
+.gw-schar-masse span { font-size: .8rem; color: #7f8c8d; }
+.gw-weg { background: #fff; border: 1px solid #e3e7eb; border-radius: 10px; padding: 12px 16px; }
+.gw-weg ol { padding-left: 20px; margin: 6px 0 14px; }
+.gw-weg li { margin: 4px 0; }
+.gw-probe-ok { color: #1e8449; }
+.gw-probe-falsch { color: #c0392b; font-weight: bold; }
+@media (max-width: 900px) { .gw { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 520px) {
+  .gw-felder { grid-template-columns: 1fr 1fr; }
+  .gw-zahlen { grid-template-columns: 1fr 1fr; }
+  .gw-tabelle th, .gw-tabelle td { padding: 10px 6px; font-size: .9rem; }
+  .gw-leiste .gw-segment { flex-wrap: wrap; }
+  .gw-leiste .gw-segment button { flex: 1 1 40%; }
+}
+.gw-tabelle td:first-child, .gw-tabelle th:first-child { position: sticky; left: 0; background: inherit; z-index: 1; }
+.gw-tabelle tbody td:first-child { background: #fff; }
+`;
+
+// --- Modul ------------------------------------------------------------------
+
+export default {
+    id: 'gaubenwange',
+    name: 'Gaubenwange',
+    version: '0.2.0',
+    apiVersion: 1,
+    author: 'Bastian',
+    description: 'Gaubenwangen (Schlepp-, Satteldach-, Flachdachgaube) aus dem Aufmass rechnen, in Scharen mit Winkelstehfalz einteilen und Zuschnittmasse je Schar ausgeben.',
+
+    register(api) {
+        const esc = api.ui.esc;
+        let daten = null;
+        let el = null;
+        let verbunden = false;
+
+        const tab = api.ui.addTab({
+            id: 'wange',
+            label: '⌂ Gaubenwange',
+            shortLabel: '⌂',
+            title: 'Gaubenwange rechnen und einteilen',
+            docType: 'gaubenwange',
+            onShow: () => zeigen()
+        });
+
+        api.documents.addType({
+            id: 'gaubenwange',
+            name: 'Gaubenwange',
+            shortName: 'Gaube',
+            description: 'Seitenwand einer Schlepp-, Satteldach- oder Flachdachgaube: Aufmass, Einteilung in Scharen, Zuschnittmasse.',
+            icon: '⌂',
+            mainTab: tab.key,
+            coreTabs: ['cutlist'],
+            hideCutlist: true,
+            onNew: ({ from }) => api.data.set(leereDaten(from)),
+            preview: (d) => {
+                const erg = d ? rechneDaten(vervollstaendige(d)) : {};
+                if (!erg.r) return { thumbnail: '', text: 'Noch kein Aufmass' };
+                const w = erg.r.wange;
+                return { thumbnail: vorschauSvg(erg.r), text: `H ${fmt(w.H, 0)} · ${erg.r.scharen.length} Scharen` };
+            }
+        });
+
+        api.on('document:loaded', () => {
+            if (api.documents.current() === 'gaubenwange' && api.ui.currentTab() === tab.key) zeigen();
+        });
+
+        const speichern = () => api.data.set(daten);
+
+        function zeigen() {
+            daten = vervollstaendige(api.data.get());
+            el = tab.container;
+            el.innerHTML = `<style>${STIL}</style><div class="gw"><div class="gw-links"></div><div class="gw-rechts"></div></div>`;
+            el.querySelector('.gw-links').innerHTML = eingabeHtml();
+            ergebnisZeigen();
+            if (!verbunden) { verbinden(); verbunden = true; }
+        }
+
+        // --- Eingabe ---------------------------------------------------------
+
+        const feldHtml = (pfad, key, def, wert) => `
+            <div class="gw-feld" data-feldkey="${esc(key)}">
+                <label for="gw-${esc(pfad)}">${esc(def.label)}</label>
+                <div class="gw-in"><input id="gw-${esc(pfad)}" type="text" inputmode="decimal" autocomplete="off" data-pfad="${esc(pfad)}" value="${esc(wert ?? '')}"><span class="gw-einh">${esc(def.einheit)}</span></div>
+                ${def.hilfe ? `<small>${esc(def.hilfe)}</small>` : ''}
+            </div>`;
+
+        const segment = (act, optionen, aktiv) => `<div class="gw-segment">${optionen.map(([wert, text]) =>
+            `<button type="button" data-act="${act}" data-wert="${esc(wert)}" class="${wert === aktiv ? 'aktiv' : ''}">${esc(text)}</button>`).join('')}</div>`;
+
+        function eingabeHtml() {
+            const e = daten.eingabe, o = daten.einstellungen;
+            const felder = FELDER_JE_ART[e.eingabeart].map((k) => feldHtml(`eingabe.${k}`, k, FELDER[k], e[k])).join('');
+            const kontrolle = KONTROLLE.filter((k) => !FELDER_JE_ART[e.eingabeart].includes(k))
+                .map((k) => feldHtml(`eingabe.kontrolle.${k}`, `k-${k}`, { ...FELDER[k], hilfe: '' }, e.kontrolle[k])).join('');
+            const zugaben = ZUGABEN.map(([k, label, einheit, hilfe]) => feldHtml(`einstellungen.${k}`, k, { label, einheit, hilfe }, o[k])).join('');
+            return `
+            <div class="gw-karte">
+                <h3>Gaube</h3>
+                ${segment('art', [['schlepp', 'Schlepp'], ['sattel', 'Satteldach'], ['flach', 'Flachdach']], e.art)}
+            </div>
+            <div class="gw-karte">
+                <h3>Aufmass</h3>
+                <div class="gw-feld">
+                    <label for="gw-eingabeart">Eingabe über</label>
+                    <div class="gw-in"><select id="gw-eingabeart" data-act="eingabeart">
+                        ${Object.entries(EINGABEARTEN).map(([k, t]) => `<option value="${k}"${k === e.eingabeart ? ' selected' : ''}>${esc(t)}${k === 'laengen' ? ' – empfohlen' : ''}</option>`).join('')}
+                    </select></div>
+                </div>
+                <div class="gw-felder">${felder}</div>
+                <p class="gw-hinweis">Masse in mm, fertig (netto) = so gross wie die Fläche am Ende.</p>
+            </div>
+            <div class="gw-karte">
+                <h3>Einteilung</h3>
+                ${segment('regel', [['vonVorne', 'Von vorne, Rest an der Spitze'], ['gleichmaessig', 'Gleichmässig']], o.regel)}
+                <div class="gw-felder">${feldHtml('einstellungen.scharbreite', 'scharbreite', { label: o.regel === 'gleichmaessig' ? 'Scharbreite höchstens' : 'Scharbreite', einheit: 'mm', hilfe: 'Achsmass Falz zu Falz' }, o.scharbreite)}</div>
+            </div>
+            <div class="gw-karte">
+                <details>
+                    <summary>Zugaben und Einstellungen</summary>
+                    <div class="gw-felder">${zugaben}</div>
+                </details>
+            </div>
+            <div class="gw-karte">
+                <details${KONTROLLE.some((k) => !leer(e.kontrolle[k])) ? ' open' : ''}>
+                    <summary>Kontrollmass (freiwillig)</summary>
+                    <p class="gw-hinweis">Zusätzlich gemessene Werte. Weicht die Rechnung ab, erscheint eine Warnung.</p>
+                    <div class="gw-felder">${kontrolle}</div>
+                </details>
+            </div>`;
+        }
+
+        // --- Ergebnis --------------------------------------------------------
+
+        function ergebnisZeigen() {
+            const ziel = el.querySelector('.gw-rechts');
+            const erg = rechneDaten(daten);
+            el.querySelectorAll('.gw-feld').forEach((f) => f.classList.toggle('gw-falsch', !!erg.feld && f.dataset.feldkey === erg.feld));
+
+            if (erg.fehlt) {
+                ziel.innerHTML = `<div class="gw-meldung leer">Bitte noch eingeben: <b>${erg.fehlt.map(esc).join(', ')}</b></div>`;
+                return;
+            }
+            if (erg.fehler) {
+                ziel.innerHTML = `<div class="gw-meldung fehler"><b>Kann nicht rechnen:</b> ${esc(erg.fehler)}</div>`;
+                return;
+            }
+            const r = erg.r, w = r.wange, a = daten.ansicht;
+            const st = Number(a.stellen) || 0;
+            const f = (z) => fmt(z, st);
+            const zuschnittFlaeche = r.scharen.reduce((t, s) => t + konturFlaeche(s.zuschnitt.kontur), 0);
+
+            const warn = [];
+            if (!r.ok) warn.push(`Eine Probe stimmt nicht: ${r.proben.filter((p) => !p.ok).map((p) => p.name).join(', ')}. Bitte Werte nicht verwenden.`);
+            warn.push(...r.warnungen);
+
+            ziel.innerHTML = `
+                ${warn.length ? `<div class="gw-meldung ${r.ok ? 'warnung' : 'fehler'}"><ul>${warn.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}
+                <div class="gw-zahlen">
+                    <div class="gw-zahl"><b>${fmt(w.alpha, 1)}°</b><span>Dachneigung α</span></div>
+                    <div class="gw-zahl"><b>${fmt(w.beta, 1)}°</b><span>Gaubenneigung β</span></div>
+                    <div class="gw-zahl"><b>${f(w.L)}</b><span>Tiefe waagrecht mm</span></div>
+                    <div class="gw-zahl"><b>${r.scharen.length}</b><span>Scharen je Wange</span></div>
+                    <div class="gw-zahl"><b>${fmt(w.flaeche / 1e6, 2)}</b><span>Fläche je Wange m²</span></div>
+                    <div class="gw-zahl"><b>${fmt(2 * zuschnittFlaeche / 1e6, 2)}</b><span>Blech beide Wangen m²</span></div>
+                </div>
+                <div class="gw-leiste">
+                    ${segment('seite', [['L', 'Linke Wange'], ['R', 'Rechte Wange']], a.seite)}
+                    ${segment('reiter', [['gesamt', 'Ansicht'], ['tabelle', 'Masstabelle'], ['schar', 'Schar'], ['weg', 'Rechenweg']], a.reiter)}
+                </div>
+                <div class="gw-ansicht">${ansichtHtml(r, a, f, st)}</div>
+                <div class="gw-leiste" style="margin-top:12px">
+                    ${segment('stellen', [['0', 'Anzeige auf 1 mm'], ['1', 'Anzeige auf 0,1 mm']], String(st))}
+                </div>`;
+        }
+
+        const konturFlaeche = (k) => Math.abs(k.reduce((t, p, i) => { const q = k[(i + 1) % k.length]; return t + p.u * q.v - q.u * p.v; }, 0) / 2);
+
+        function ansichtHtml(r, a, f, st) {
+            const seite = a.seite === 'R' ? 'R' : 'L';
+            const w = r.wange;
+            if (a.reiter === 'tabelle') {
+                const zeilen = r.scharen.map((s) => {
+                    const z = s.zuschnitt;
+                    return `<tr data-act="zeigeSchar" data-wert="${s.nr}"><td>${seite}${s.nr}</td><td>${f(s.breite)}</td><td>${f(s.h0)}</td><td>${f(s.h1)}</td>
+                        <td>${f(z.breite)}</td><td>${f(z.hoeheLinks)}</td><td>${f(z.hoeheRechts)}</td><td>${f(z.versatzUnten)}</td><td>${f(z.versatzOben)}</td></tr>`;
+                }).join('');
+                return `<div class="gw-tabelle-rahmen"><table class="gw-tabelle">
+                    <thead><tr><th>Pos</th><th>Achs-<br>mass</th><th>Naht<br>vorne</th><th>Naht<br>hinten</th><th>Zuschnitt<br>Breite</th><th>Zuschnitt<br>Höhe vorne</th><th>Zuschnitt<br>Höhe hinten</th><th>Versatz<br>unten</th><th>Versatz<br>oben</th></tr></thead>
+                    <tbody>${zeilen}</tbody>
+                    <tfoot><tr><td>Summe</td><td>${f(r.scharen.reduce((t, s) => t + s.breite, 0))}</td><td colspan="7"></td></tr></tfoot>
+                </table></div>
+                <p class="gw-hinweis">Summe der Achsmasse = Tiefe waagrecht ${f(w.L)} mm. Zuschnitthöhen inklusive Querfalz. Vorne = Seite zur Gaubenfront. Zeile antippen für die Zuschnittskizze. ${seite === 'R' ? 'Rechte Wange: alle Masse wie links, Zuschnitt gespiegelt.' : ''}</p>`;
+            }
+            if (a.reiter === 'schar') {
+                const nr = Math.min(Math.max(1, Number(a.schar) || 1), r.scharen.length);
+                const s = r.scharen[nr - 1];
+                const z = seite === 'R' ? spiegeln(s.zuschnitt) : s.zuschnitt;
+                const pos = `${seite}${s.nr}`;
+                return `
+                    <div class="gw-schar-kopf">
+                        <button type="button" data-act="schar" data-wert="${nr - 1}" ${nr <= 1 ? 'disabled' : ''} aria-label="vorherige Schar">‹</button>
+                        <strong>Schar ${esc(pos)} von ${r.scharen.length}</strong>
+                        <button type="button" data-act="schar" data-wert="${nr + 1}" ${nr >= r.scharen.length ? 'disabled' : ''} aria-label="nächste Schar">›</button>
+                    </div>
+                    ${svgSchar(z, pos, st)}
+                    <div class="gw-schar-masse">
+                        <div><b>${f(z.breite)}</b><span>Zuschnitt Breite</span></div>
+                        <div><b>${f(s.zuschnitt.hoeheLinks)}</b><span>Höhe an der Seite zur Front</span></div>
+                        <div><b>${f(s.zuschnitt.hoeheRechts)}</b><span>Höhe an der Seite zur Spitze</span></div>
+                        <div><b>${f(z.versatzUnten)}</b><span>Versatz unten</span></div>
+                        <div><b>${f(z.versatzOben)}</b><span>Versatz oben</span></div>
+                        <div><b>${f(s.breite)}</b><span>Achsmass (netto)</span></div>
+                        <div><b>${f(z.zugabeFront)} / ${f(z.zugabeSpitze)}</b><span>Stehfalz Front / Spitze</span></div>
+                        <div><b>${f(s.h0)} / ${f(s.h1)}</b><span>Nahtlänge vorne / hinten</span></div>
+                    </div>
+                    <p class="gw-hinweis">Rot gestrichelt: Biegelinien. Höhen am Zuschnitt inklusive Querfalz (oben ${fmt(z.querObenSenkrecht, 1)} mm, unten ${fmt(z.querUntenSenkrecht, 1)} mm senkrecht gemessen).</p>`;
+            }
+            if (a.reiter === 'weg') {
+                const z0 = r.scharen[0].zuschnitt;
+                const zeilen = [
+                    ...w.rechenweg,
+                    `Höhenabnahme je mm waagrecht: tan α − tan β = ${fmt(w.d, 5)}`,
+                    `Nahtlänge an der Stelle x: h(x) = H − x · ${fmt(w.d, 5)}`,
+                    `Querfalz oben senkrecht = ${fmt(z0.querOben, 1)} / cos ${fmt(w.beta, 2)}° = ${fmt(z0.querObenSenkrecht, 2)} mm`,
+                    `Querfalz unten senkrecht = ${fmt(z0.querUnten, 1)} / cos ${fmt(w.alpha, 2)}° = ${fmt(z0.querUntenSenkrecht, 2)} mm`,
+                    `Versatz unten = Zuschnittbreite · tan α, Versatz oben = Zuschnittbreite · tan β`
+                ];
+                return `<div class="gw-weg">
+                    <b>Rechenweg</b><ol>${zeilen.map((t) => `<li>${esc(t)}</li>`).join('')}</ol>
+                    <b>Proben</b><ol>${r.proben.map((p) => `<li class="${p.ok ? 'gw-probe-ok' : 'gw-probe-falsch'}">${p.ok ? '✓' : '✗'} ${esc(p.name)}</li>`).join('')}</ol>
+                </div>`;
+            }
+            return svgGesamt(r, seite, st) + `<p class="gw-hinweis">Orange: Nahtlängen netto. Blau: Achsmasse der Scharen. ${seite === 'R' ? 'Rechte Wange, von aussen gesehen.' : 'Linke Wange, von aussen gesehen.'}</p>`;
+        }
+
+        // --- Ereignisse ------------------------------------------------------
+
+        function verbinden() {
+            el.addEventListener('input', (ev) => {
+                const pfad = ev.target.dataset && ev.target.dataset.pfad;
+                if (!pfad) return;
+                const teile = pfad.split('.');
+                let ziel = daten;
+                for (const t of teile.slice(0, -1)) ziel = ziel[t];
+                ziel[teile[teile.length - 1]] = ev.target.value;
+                speichern();
+                ergebnisZeigen();
+            });
+            el.addEventListener('change', (ev) => {
+                if (ev.target.dataset.act === 'eingabeart') {
+                    daten.eingabe.eingabeart = ev.target.value;
+                    speichern();
+                    zeigenNeu();
+                }
+            });
+            el.addEventListener('click', (ev) => {
+                const k = ev.target.closest('[data-act]');
+                if (!k || k.tagName === 'SELECT') return;
+                const wert = k.dataset.wert;
+                switch (k.dataset.act) {
+                    case 'art': daten.eingabe.art = wert; break;
+                    case 'regel': daten.einstellungen.regel = wert; break;
+                    case 'seite': daten.ansicht.seite = wert; break;
+                    case 'reiter': daten.ansicht.reiter = wert; break;
+                    case 'stellen': daten.ansicht.stellen = Number(wert); break;
+                    case 'schar': daten.ansicht.schar = Number(wert); break;
+                    case 'zeigeSchar': daten.ansicht.schar = Number(wert); daten.ansicht.reiter = 'schar'; break;
+                    default: return;
+                }
+                speichern();
+                if (k.dataset.act === 'art' || k.dataset.act === 'regel') zeigenNeu();
+                else ergebnisZeigen();
+            });
+        }
+
+        // Eingabe neu aufbauen, Fokus und Scrollstand behalten
+        function zeigenNeu() {
+            const links = el.querySelector('.gw-links');
+            links.innerHTML = eingabeHtml();
+            ergebnisZeigen();
+        }
+    }
+};

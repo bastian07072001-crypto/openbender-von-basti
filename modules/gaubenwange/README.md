@@ -2,7 +2,7 @@
 
 Rechner für Gaubenwangen (Schlepp-, Satteldach- und Flachdachgaube): Wangendreieck aus dem Aufmass, Einteilung in senkrechte Scharen mit Winkelstehfalz, Zuschnittmasse mit Falz- und Querfalzzugaben, linke und gespiegelte rechte Wange.
 
-**Stand: Etappe 1 – nur Rechenkern.** Noch keine Oberfläche, das Modul ist nicht in `modules/index.json` eingetragen und wird von der App nicht geladen.
+**Stand: Etappe 2 – Rechenkern und Oberfläche.** Das Modul ist in `modules/index.json` eingetragen und standardmässig eingeschaltet. Bei „Neu“ und „+ Neues Ausmass“ gibt es die Art „Gaubenwange“ mit eigenem Tab: Eingabe, Gesamtansicht, Masstabelle, Zuschnitt je Schar, Rechenweg mit Proben, linke und rechte Wange. PDF und DXF folgen in Etappe 4 und 5.
 
 ## Prüfen
 
