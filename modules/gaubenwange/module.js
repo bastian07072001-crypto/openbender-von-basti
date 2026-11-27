@@ -435,6 +435,7 @@ export function rechne(eingabe, einstellungen = {}) {
     return {
         version: 1,
         art,
+        eingabe: { ...eingabe },
         wange: w,
         einstellungen: o,
         scharen: liste,
@@ -685,6 +686,402 @@ function vorschauSvg(r) {
     return `<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg"><polygon points="${p(0, 0)} ${p(0, w.H)} ${p(w.L, w.yS)}" fill="#d5f5ee" stroke="#16a085" stroke-width="2" stroke-linejoin="round"/>${achsen}</svg>`;
 }
 
+// --- Rechenweg als Textzeilen (Tab „Rechenweg“ und PDF) ---------------------
+
+export function rechenwegZeilen(r) {
+    const w = r.wange;
+    const z0 = r.scharen[0].zuschnitt;
+    return [
+        ...w.rechenweg,
+        `Höhenabnahme je mm waagrecht: tan α − tan β = ${fmt(w.d, 5)}`,
+        `Nahtlänge an der Stelle x: h(x) = H − x · ${fmt(w.d, 5)}`,
+        `Querfalz oben senkrecht = ${fmt(z0.querOben, 1)} / cos ${fmt(w.beta, 2)}° = ${fmt(z0.querObenSenkrecht, 2)} mm`,
+        `Querfalz unten senkrecht = ${fmt(z0.querUnten, 1)} / cos ${fmt(w.alpha, 2)}° = ${fmt(z0.querUntenSenkrecht, 2)} mm`,
+        `Versatz unten = Zuschnittbreite · tan α, Versatz oben = Zuschnittbreite · tan β`,
+        ...bandWeg(r)
+    ];
+}
+
+/** Fläche einer Zuschnittkontur (mm²). */
+export const konturFlaeche = (k) => Math.abs(k.reduce((t, p, i) => { const q = k[(i + 1) % k.length]; return t + p.u * q.v - q.u * p.v; }, 0) / 2);
+
+// =============================================================================
+// PDF (Etappe 4): Übersicht, Zuschnitte (4 je A4-Seite), Rechenweg
+// =============================================================================
+
+// Die PDF-Standardschrift kennt nur Westeuropäisch (Latin-1): Zeichen ersetzen.
+const PDF_ERSATZ = {
+    'α': 'alpha', 'β': 'beta', '−': '-', '–': '-', '—': '-', '→': '->', '√': 'Wurzel', 'ᵤ': 'u', 'ₒ': 'o',
+    '✓': 'OK', '✗': 'FEHLER', '„': '"', '“': '"', '”': '"', '‘': "'", '’': "'", '…': '...', '≈': 'ca.',
+    '≤': '<=', '≥': '>=', '⌂': ''
+};
+export const pdfText = (t) => String(t)
+    .replace(/[^\x00-\xff]/g, (c) => (c in PDF_ERSATZ ? PDF_ERSATZ[c] : '?'));
+
+const PT = 0.3528;                       // 1 pt in mm
+const DUNKEL = [33, 37, 41];
+const GRAU = [108, 117, 125];
+const HELL = [233, 236, 239];
+const BLAU = [36, 113, 163];
+const ROT = [192, 57, 43];
+const GRUEN = [14, 102, 85];
+
+/** Zeichenhelfer auf einem jsPDF-Dokument (Einheit mm). */
+function pdfStift(doc) {
+    const schrift = (o) => {
+        doc.setFont('helvetica', o.fett ? 'bold' : 'normal');
+        doc.setFontSize(o.fs || 9);
+        doc.setTextColor(...(o.farbe || DUNKEL));
+    };
+    const st = {
+        breite(t, o = {}) { schrift(o); return doc.getTextWidth(pdfText(t)); },
+        text(x, y, t, o = {}) {
+            schrift(o);
+            doc.text(pdfText(t), x, y, { align: o.align || 'left' });
+        },
+        /** Text mittig um (x, y), auch gedreht (Grad, gegen den Uhrzeigersinn). */
+        mitte(x, y, t, o = {}) {
+            schrift(o);
+            const s = pdfText(t);
+            const w = doc.getTextWidth(s);
+            const a = ((o.winkel || 0) * Math.PI) / 180;
+            const hh = (o.fs || 9) * PT * 0.35;             // halbe Versalhöhe
+            const dx = Math.cos(a), dy = -Math.sin(a);       // Leserichtung auf dem Blatt
+            const nx = Math.sin(a), ny = Math.cos(a);        // senkrecht dazu, nach unten
+            doc.text(s, x - dx * w / 2 + nx * hh, y - dy * w / 2 + ny * hh, { angle: o.winkel || 0 });
+        },
+        linie(x1, y1, x2, y2, o = {}) {
+            doc.setDrawColor(...(o.farbe || DUNKEL));
+            doc.setLineWidth(o.b || 0.25);
+            if (o.strich) doc.setLineDashPattern([1.6, 1.0], 0);
+            doc.line(x1, y1, x2, y2);
+            if (o.strich) doc.setLineDashPattern([], 0);
+        },
+        vieleck(punkte, o = {}) {
+            const d = punkte.slice(1).map((p, i) => [p[0] - punkte[i][0], p[1] - punkte[i][1]]);
+            doc.setDrawColor(...(o.farbe || DUNKEL));
+            doc.setFillColor(...(o.fuellung || HELL));
+            doc.setLineWidth(o.b || 0.35);
+            doc.lines(d, punkte[0][0], punkte[0][1], [1, 1], o.fuellung === null ? 'S' : 'FD', true);
+        },
+        rahmen(x, y, w, h, o = {}) {
+            doc.setDrawColor(...(o.farbe || [206, 212, 218]));
+            doc.setLineWidth(o.b || 0.25);
+            if (o.fuellung) { doc.setFillColor(...o.fuellung); doc.roundedRect(x, y, w, h, 1.5, 1.5, 'FD'); }
+            else doc.roundedRect(x, y, w, h, 1.5, 1.5, 'S');
+        }
+    };
+    return st;
+}
+
+/** Gesamtskizze der linken Wange in den Kasten (x, y, b, h). */
+function pdfGesamt(st, r, kasten, f) {
+    const w = r.wange;
+    const rand = { l: 16, r: 8, o: 7, u: 15 };
+    const s = Math.min((kasten.b - rand.l - rand.r) / w.L, (kasten.h - rand.o - rand.u) / w.yS);
+    const bx = kasten.x + rand.l + (kasten.b - rand.l - rand.r - w.L * s) / 2;
+    const by = kasten.y + rand.o + w.yS * s;
+    const X = (x) => bx + x * s;
+    const Y = (y) => by - y * s;
+
+    st.vieleck([[X(0), Y(0)], [X(0), Y(w.H)], [X(w.L), Y(w.yS)]], { fuellung: [236, 246, 243], farbe: GRUEN, b: 0.45 });
+
+    r.scharen.forEach((sc, i) => {
+        if (i > 0) {
+            st.linie(X(sc.x0), Y(sc.x0 * w.tanA), X(sc.x0), Y(w.H + sc.x0 * w.tanB), { farbe: BLAU, strich: true, b: 0.3 });
+            const t = f(sc.h0);
+            if (sc.h0 * s > st.breite(t, { fs: 7 }) + 2) st.mitte(X(sc.x0) + 1.8, Y(sc.x0 * w.tanA + sc.h0 / 2), t, { fs: 7, winkel: 90, farbe: [160, 64, 0] });
+        }
+        const xm = (sc.x0 + sc.x1) / 2;
+        const ym = xm * w.tanA + (sc.h0 + sc.h1) / 4;
+        if (sc.breite * s > 7 && (sc.h0 + sc.h1) / 2 * s > 4) st.mitte(X(xm), Y(ym), `L${sc.nr}`, { fs: 9, fett: true });
+    });
+
+    // Masskette der Achsmasse
+    const yK = Y(0) + 6;
+    st.linie(X(0), yK, X(w.L), yK, { farbe: BLAU });
+    r.scharen.forEach((sc) => {
+        st.linie(X(sc.x0), yK - 1.2, X(sc.x0), yK + 1.2, { farbe: BLAU });
+        const t = f(sc.breite);
+        if (sc.breite * s > st.breite(t, { fs: 7.5 }) + 1.5) st.mitte(X((sc.x0 + sc.x1) / 2), yK - 2, t, { fs: 7.5, farbe: BLAU });
+    });
+    st.linie(X(w.L), yK - 1.2, X(w.L), yK + 1.2, { farbe: BLAU });
+    st.mitte(X(w.L / 2), yK + 4.5, `Tiefe waagrecht ${f(w.L)} mm`, { fs: 8, farbe: BLAU });
+
+    // Höhe vorne
+    const xH = X(0) - 6;
+    st.linie(xH, Y(0), xH, Y(w.H), { farbe: [160, 64, 0] });
+    st.linie(xH - 1.2, Y(0), xH + 1.2, Y(0), { farbe: [160, 64, 0] });
+    st.linie(xH - 1.2, Y(w.H), xH + 1.2, Y(w.H), { farbe: [160, 64, 0] });
+    st.mitte(xH - 2.6, Y(w.H / 2), `Höhe vorne ${f(w.H)}`, { fs: 8, fett: true, winkel: 90, farbe: [160, 64, 0] });
+
+    // Kanten
+    const nu = { x: Math.sin(w.alpha * RAD), y: -Math.cos(w.alpha * RAD) };
+    const no = { x: -Math.sin(w.beta * RAD), y: Math.cos(w.beta * RAD) };
+    const ab = 3.2 / s;
+    const mu = { x: w.L * 0.62, y: w.L * 0.62 * w.tanA };
+    const mo = { x: w.L * 0.42, y: w.H + w.L * 0.42 * w.tanB };
+    st.mitte(X(mu.x + nu.x * ab), Y(mu.y + nu.y * ab), `Unterkante ${f(w.su)}`, { fs: 8, winkel: w.alpha, farbe: GRUEN });
+    st.mitte(X(mo.x + no.x * ab), Y(mo.y + no.y * ab), `Oberkante ${f(w.so)}`, { fs: 8, winkel: w.beta, farbe: GRUEN });
+}
+
+/** Eine Zuschnittskizze mit Massen in die Zelle (x, y, b, h). */
+function pdfSchar(st, r, sc, seite, zelle, f) {
+    const R = seite === 'R';
+    const z = R ? spiegeln(sc.zuschnitt) : sc.zuschnitt;
+    const { x, y, b, h } = zelle;
+    st.rahmen(x, y, b, h);
+
+    // Kopf
+    st.text(x + 4, y + 8, `${seite}${sc.nr}`, { fs: 15, fett: true, farbe: GRUEN });
+    st.text(x + b - 4, y + 5.5, `${R ? 'Rechte' : 'Linke'} Wange`, { fs: 8, fett: true, align: 'right' });
+    st.text(x + b - 4, y + 9.5, `Schar ${sc.nr} von ${r.scharen.length}`, { fs: 8, farbe: GRAU, align: 'right' });
+
+    // Skizze
+    const vmax = Math.max(...z.kontur.map((p) => p.v));
+    const feld = { x: x + 4, y: y + 13, b: b - 8, h: h - 13 - 33 };
+    const rand = { l: 13, r: 13, o: 8, u: 15 };
+    const s = Math.min((feld.b - rand.l - rand.r) / z.breite, (feld.h - rand.o - rand.u) / vmax);
+    const bx = feld.x + rand.l + (feld.b - rand.l - rand.r - z.breite * s) / 2;
+    const by = feld.y + rand.o + vmax * s + ((feld.h - rand.o - rand.u) - vmax * s) / 2;
+    const X = (u) => bx + u * s;
+    const Y = (v) => by - v * s;
+
+    st.vieleck(z.kontur.map((p) => [X(p.u), Y(p.v)]), { fuellung: [244, 246, 248], b: 0.45 });
+    z.biegen.forEach((l) => st.linie(X(l.a.u), Y(l.a.v), X(l.b.u), Y(l.b.v), { farbe: ROT, strich: true, b: 0.3 }));
+
+    const links = z.kontur.filter((p) => p.u < z.breite / 2);
+    const rechts = z.kontur.filter((p) => p.u >= z.breite / 2);
+    const lo = Math.max(...links.map((p) => p.v)), lu = Math.min(...links.map((p) => p.v));
+    const ro = Math.max(...rechts.map((p) => p.v)), ru = Math.min(...rechts.map((p) => p.v));
+    const unten = Math.min(lu, ru), oben = Math.max(lo, ro);
+
+    // Breite
+    const yB = Y(unten) + 4.5;
+    st.linie(X(0), yB, X(z.breite), yB, { farbe: BLAU });
+    st.linie(X(0), yB - 1.2, X(0), yB + 1.2, { farbe: BLAU });
+    st.linie(X(z.breite), yB - 1.2, X(z.breite), yB + 1.2, { farbe: BLAU });
+    st.mitte(X(z.breite / 2), yB + 3.6, `Breite ${f(z.breite)}`, { fs: 10, fett: true, farbe: BLAU });
+    // Höhen an den Seiten
+    st.mitte(X(0) - 6.5, (Y(lo) + Y(lu)) / 2, f(lo - lu), { fs: 10, fett: true, winkel: 90, farbe: [160, 64, 0] });
+    st.mitte(X(z.breite) + 6.5, (Y(ro) + Y(ru)) / 2, f(ro - ru), { fs: 10, fett: true, winkel: 90, farbe: [160, 64, 0] });
+    // Seiten benennen
+    st.mitte(X(0), Y(lo) - 2.2, R ? 'Spitze' : 'Front', { fs: 7, farbe: GRAU });
+    st.mitte(X(z.breite), Y(ro) - 2.2, R ? 'Front' : 'Spitze', { fs: 7, farbe: GRAU });
+    // Versatz
+    st.mitte(X(z.breite / 2), Y(oben) - 5, `Versatz oben ${f(z.versatzOben)}`, { fs: 7.5, farbe: GRAU });
+    st.mitte(X(z.breite / 2), yB + 7.4, `Versatz unten ${f(z.versatzUnten)}`, { fs: 7.5, farbe: GRAU });
+
+    // Massliste
+    const zeilen = [
+        ['Zuschnitt Breite', f(sc.zuschnitt.breite)],
+        ['Höhe vorne (Front)', f(sc.zuschnitt.hoeheLinks)],
+        ['Höhe hinten (Spitze)', f(sc.zuschnitt.hoeheRechts)],
+        ['Versatz unten / oben', `${f(sc.zuschnitt.versatzUnten)} / ${f(sc.zuschnitt.versatzOben)}`],
+        ['Achsmass', f(sc.breite)],
+        ['Naht vorne / hinten', `${f(sc.h0)} / ${f(sc.h1)}`],
+        ['Stehfalz Front / Spitze', `${f(sc.zuschnitt.zugabeFront)} / ${f(sc.zuschnitt.zugabeSpitze)}`],
+        ['Querfalz oben / unten senkr.', `${fmt(sc.zuschnitt.querObenSenkrecht, 1)} / ${fmt(sc.zuschnitt.querUntenSenkrecht, 1)}`]
+    ];
+    const y0 = y + h - 31;
+    st.linie(x + 4, y0 - 3, x + b - 4, y0 - 3, { farbe: [222, 226, 230] });
+    zeilen.forEach(([k, v], i) => {
+        const yy = y0 + i * 3.7;
+        st.text(x + 5, yy, k, { fs: 7.5, farbe: GRAU });
+        st.text(x + b - 5, yy, v, { fs: 8.5, fett: i < 4, align: 'right' });
+    });
+}
+
+/**
+ * PDF einer Gaubenwange.
+ * @param {Function} JsPDF  Konstruktor (api.libs.jsPDF)
+ * @param {object} r        Ergebnis von rechne()
+ * @param {object} kopf     Projektdaten (api.project.get()) und { gaube: Name des Ausmasses }
+ * @param {object} opt      { seiten: 'beide' | 'L' | 'R', rechenweg: true, stellen: 0 | 1, datum: Date }
+ */
+export function pdfGaube(JsPDF, r, kopf = {}, opt = {}) {
+    const doc = new JsPDF('p', 'mm', 'a4');
+    const st = pdfStift(doc);
+    const W = 210, H = 297, M = 15;
+    const stellen = Number(opt.stellen) || 0;
+    const f = (z) => fmt(z, stellen);
+    const datum = (opt.datum || new Date()).toLocaleDateString('de-CH');
+    const w = r.wange, o = r.einstellungen;
+    const gaube = kopf.gaube || kopf.profileName || 'Gaube';
+    const projektzeile = [kopf.projectNumber, kopf.projectName, gaube].filter(Boolean).join(' · ');
+
+    const seitenkopf = (titel) => {
+        st.text(M, 18, titel, { fs: 16, fett: true, farbe: [44, 62, 80] });
+        st.text(W - M, 18, projektzeile, { fs: 9, farbe: GRAU, align: 'right' });
+    };
+
+    // --- Seite 1: Übersicht -------------------------------------------------
+    st.text(M, 18, 'Gaubenwange', { fs: 16, fett: true, farbe: [44, 62, 80] });
+    st.text(W - M, 18, `Datum: ${datum}`, { fs: 8, farbe: GRAU, align: 'right' });
+    st.rahmen(M, 22, W - 2 * M, 26, { fuellung: [248, 249, 250] });
+    const kopfzeile = (xk, yk, k, v) => { st.text(xk, yk, k, { fs: 9, fett: true }); st.text(xk + 30, yk, v || '-', { fs: 9 }); };
+    kopfzeile(M + 4, 28, 'Projekt-Nr.:', kopf.projectNumber);
+    kopfzeile(M + 4, 34, 'Projekt-Name:', kopf.projectName);
+    kopfzeile(M + 4, 40, 'Gaube:', gaube);
+    kopfzeile(M + 4, 46, 'Zeichner:', kopf.projectAuthor);
+    const mat = `${kopf.materialType || '-'}${kopf.materialSpec ? ` (${kopf.materialSpec})` : ''}`;
+    kopfzeile(M + 96, 28, 'Material:', mat);
+    kopfzeile(M + 96, 34, 'Stärke:', kopf.materialThickness ? `${Number(kopf.materialThickness).toFixed(2)} mm` : '-');
+    kopfzeile(M + 96, 40, 'Farbe:', kopf.materialColor);
+    kopfzeile(M + 96, 46, 'Gaubenart:', ARTEN[r.art] || r.art);
+
+    // Aufmass, Einteilung, Zugaben
+    const e = r.eingabe || {};
+    const aufmass = (FELDER_JE_ART[e.eingabeart || 'laengen'] || []).map((k) => [FELDER[k].label, `${FELDER[k].einheit === '°' ? fmt(zahl(e[k], k, k), 1) : f(zahl(e[k], k, k))} ${FELDER[k].einheit}`]);
+    const m = scharmasse(o);
+    const einteilung = [
+        ['Regel', o.regel === 'gleichmaessig' ? 'Gleichmässig' : 'Von vorne, Rest an der Spitze'],
+        o.vorgabe === 'band'
+            ? ['Bandbreite', `${f(m.band)} mm`]
+            : [o.regel === 'gleichmaessig' ? 'Scharbreite höchstens' : 'Scharbreite', `${f(m.b)} mm`],
+        ...(o.vorgabe === 'band' ? [['Achsmass / erste Schar', `${f(m.b)} / ${f(m.b1)} mm`]] : [])
+    ];
+    const zugaben = [
+        ['Stehfalz Front / Spitze', `${fmt(o.zugabeFront, 1)} / ${fmt(o.zugabeSpitze, 1)} mm`],
+        ['Erste Schar an der Ecke', `${fmt(o.zugabeErsteFront, 1)} mm`],
+        ['Querfalz oben / unten', `${fmt(o.querOben, 1)} / ${fmt(o.querUnten, 1)} mm`]
+    ];
+    const block = (xk, yk, titel, zeilen, bk) => {
+        st.text(xk, yk, titel, { fs: 9, fett: true, farbe: [52, 73, 94] });
+        zeilen.forEach(([k, v], i) => {
+            st.text(xk, yk + 5 + i * 4.4, k, { fs: 8.5, farbe: GRAU });
+            st.text(xk + bk, yk + 5 + i * 4.4, v, { fs: 9, fett: true, align: 'right' });
+        });
+    };
+    block(M, 56, 'Aufmass (netto, fertig)', aufmass, 56);
+    block(M + 62, 56, 'Einteilung', einteilung, 54);
+    block(M + 124, 56, 'Zugaben', zugaben, 56);
+
+    // Kennzahlen
+    const zuschnittFlaeche = r.scharen.reduce((t, sc) => t + konturFlaeche(sc.zuschnitt.kontur), 0);
+    const kz = [
+        [`${fmt(w.alpha, 1)}°`, 'Dachneigung'],
+        [`${fmt(w.beta, 1)}°`, 'Gaubenneigung'],
+        [f(w.L), 'Tiefe waagrecht mm'],
+        [String(r.scharen.length), 'Scharen je Wange'],
+        [fmt(w.flaeche / 1e6, 2), 'Fläche je Wange m²'],
+        [fmt(2 * zuschnittFlaeche / 1e6, 2), 'Blech beide Wangen m²']
+    ];
+    const kb = (W - 2 * M - 5 * 3) / 6;
+    kz.forEach(([v, t], i) => {
+        const xk = M + i * (kb + 3);
+        st.rahmen(xk, 74, kb, 14, { fuellung: [248, 249, 250] });
+        st.mitte(xk + kb / 2, 79.5, v, { fs: 12, fett: true });
+        st.mitte(xk + kb / 2, 85, t, { fs: 6.5, farbe: GRAU });
+    });
+
+    // Gesamtskizze
+    st.text(M, 96, 'Linke Wange von aussen (rechte Wange spiegelbildlich, gleiche Masse)', { fs: 8, farbe: GRAU });
+    pdfGesamt(st, r, { x: M, y: 98, b: W - 2 * M, h: 88 }, f);
+
+    // Masstabelle
+    const spalten = [
+        ['Pos', 15, 'left'], ['Achs-\nmass', 19], ['Naht\nvorne', 20], ['Naht\nhinten', 20], ['Zuschnitt\nBreite', 22],
+        ['Zuschnitt\nHöhe vorne', 22], ['Zuschnitt\nHöhe hinten', 22], ['Versatz\nunten', 20], ['Versatz\noben', 20]
+    ];
+    let yt = 192;
+    const kopfTabelle = () => {
+        let xs = M;
+        doc.setFillColor(52, 73, 94);
+        doc.rect(M, yt, W - 2 * M, 9, 'F');
+        spalten.forEach(([t, b, al]) => {
+            t.split('\n').forEach((teil, j) => st.text(al === 'left' ? xs + 2 : xs + b - 2, yt + 3.8 + j * 3.4, teil, { fs: 7, fett: true, farbe: [255, 255, 255], align: al === 'left' ? 'left' : 'right' }));
+            xs += b;
+        });
+        yt += 9;
+    };
+    kopfTabelle();
+    const zeile = (werte, opt2 = {}) => {
+        if (yt + 7 > H - 16) { doc.addPage(); seitenkopf('Masstabelle (Fortsetzung)'); yt = 26; kopfTabelle(); }
+        if (opt2.fuellung) { doc.setFillColor(...opt2.fuellung); doc.rect(M, yt, W - 2 * M, 7, 'F'); }
+        let xs = M;
+        werte.forEach((v, i) => {
+            const [, b, al] = spalten[i];
+            st.text(al === 'left' ? xs + 2 : xs + b - 2, yt + 4.9, v, { fs: 9.5, fett: i === 0 || opt2.fett, align: al === 'left' ? 'left' : 'right' });
+            xs += b;
+        });
+        st.linie(M, yt + 7, W - M, yt + 7, { farbe: [222, 226, 230], b: 0.2 });
+        yt += 7;
+    };
+    r.scharen.forEach((sc, i) => {
+        const z = sc.zuschnitt;
+        zeile([`L${sc.nr} / R${sc.nr}`, f(sc.breite), f(sc.h0), f(sc.h1), f(z.breite), f(z.hoeheLinks), f(z.hoeheRechts), f(z.versatzUnten), f(z.versatzOben)],
+            { fuellung: i % 2 ? [248, 249, 250] : null });
+    });
+    zeile(['Summe', f(r.scharen.reduce((t, sc) => t + sc.breite, 0)), '', '', '', '', '', '', ''], { fett: true });
+    yt += 2;
+    st.text(M, yt + 3, 'Masse in mm. Zuschnitthöhen inklusive Querfalz. Vorne = Seite zur Gaubenfront.', { fs: 7.5, farbe: GRAU });
+    yt += 7;
+
+    // Prüfung
+    const warn = [];
+    if (!r.ok) warn.push(`PROBE STIMMT NICHT: ${r.proben.filter((p) => !p.ok).map((p) => p.name).join(', ')}. Werte nicht verwenden!`);
+    warn.push(...r.warnungen);
+    const okText = r.ok ? `Alle ${r.proben.length} Proben stimmen.${opt.rechenweg !== false ? ' Rechenweg auf der letzten Seite.' : ''}` : '';
+    const warnZeilen = warn.flatMap((t) => doc.splitTextToSize(pdfText(`- ${t}`), W - 2 * M - 8));
+    const hoehe = (okText ? 6 : 0) + (warnZeilen.length ? 5 + warnZeilen.length * 4 : 0) + 3;
+    if (yt + hoehe > H - 14) { doc.addPage(); seitenkopf('Prüfung'); yt = 26; }
+    if (okText) { st.text(M, yt + 3, okText, { fs: 9, fett: true, farbe: GRUEN }); yt += 6; }
+    if (warnZeilen.length) {
+        st.rahmen(M, yt, W - 2 * M, 4 + warnZeilen.length * 4, { fuellung: r.ok ? [255, 248, 225] : [253, 237, 236], farbe: r.ok ? [243, 156, 18] : ROT });
+        warnZeilen.forEach((t, i) => st.text(M + 4, yt + 4.5 + i * 4, t, { fs: 8.5, fett: !r.ok, farbe: r.ok ? [125, 80, 0] : ROT }));
+    }
+
+    // --- Zuschnitte: 4 je Seite --------------------------------------------
+    const seiten = opt.seiten === 'L' ? ['L'] : opt.seiten === 'R' ? ['R'] : ['L', 'R'];
+    const liste = seiten.flatMap((sd) => r.scharen.map((sc) => ({ sd, sc })));
+    const zb = (W - 2 * M - 4) / 2, zh = (H - 26 - 16 - 4) / 2;
+    liste.forEach(({ sd, sc }, i) => {
+        if (i % 4 === 0) {
+            doc.addPage();
+            const teil = liste.slice(i, i + 4);
+            const welche = [...new Set(teil.map((t) => t.sd))].map((x) => (x === 'L' ? 'linke' : 'rechte')).join(' und ');
+            seitenkopf(`Zuschnitt ${welche} Wange`);
+        }
+        const k = i % 4;
+        pdfSchar(st, r, sc, sd, { x: M + (k % 2) * (zb + 4), y: 24 + Math.floor(k / 2) * (zh + 4), b: zb, h: zh }, f);
+    });
+
+    // --- Rechenweg ---------------------------------------------------------
+    if (opt.rechenweg !== false) {
+        doc.addPage();
+        seitenkopf('Rechenweg und Proben');
+        let yr = 28;
+        const neueZeile = (t, o2 = {}) => {
+            const teile = doc.splitTextToSize(pdfText(t), W - 2 * M - 8);
+            if (yr + teile.length * 4.4 > H - 14) { doc.addPage(); seitenkopf('Rechenweg (Fortsetzung)'); yr = 28; }
+            teile.forEach((tt, j) => st.text(M + (j ? 8 : 0) + (o2.einzug || 0), yr + j * 4.4, tt, { fs: 9, ...o2 }));
+            yr += teile.length * 4.4 + 1.2;
+        };
+        rechenwegZeilen(r).forEach((t, i) => neueZeile(`${i + 1}. ${t}`));
+        yr += 4;
+        neueZeile('Proben', { fett: true });
+        r.proben.forEach((p) => neueZeile(`${p.ok ? 'OK' : 'FEHLER'}  ${p.name}`, { farbe: p.ok ? GRUEN : ROT, fett: !p.ok }));
+    }
+
+    // --- Fusszeile -----------------------------------------------------------
+    const n = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= n; i++) {
+        doc.setPage(i);
+        st.text(M, H - 8, 'Erstellt mit openBender · Skizzen nicht massstäblich, Masse in mm', { fs: 7.5, farbe: [150, 150, 150] });
+        st.text(W - M, H - 8, `Seite ${i} von ${n}`, { fs: 7.5, farbe: [150, 150, 150], align: 'right' });
+    }
+    return doc;
+}
+
+/** Dateiname wie bei OpenBender: Projektnummer_Name_Gaubenwange_Datum_Zeit.pdf */
+export function pdfDateiname(kopf = {}, jetzt = new Date()) {
+    const teil = (t) => String(t || '').trim().replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, '-');
+    const zwei = (z) => String(z).padStart(2, '0');
+    const stempel = `${jetzt.getFullYear()}-${zwei(jetzt.getMonth() + 1)}-${zwei(jetzt.getDate())}_${zwei(jetzt.getHours())}${zwei(jetzt.getMinutes())}`;
+    return [teil(kopf.projectNumber), teil(kopf.gaube || kopf.profileName), 'Gaubenwange', stempel].filter(Boolean).join('_') + '.pdf';
+}
+
 // --- Stil -----------------------------------------------------------------
 
 const STIL = `
@@ -759,7 +1156,7 @@ const STIL = `
 export default {
     id: 'gaubenwange',
     name: 'Gaubenwange',
-    version: '0.3.0',
+    version: '0.4.0',
     apiVersion: 1,
     author: 'Bastian',
     description: 'Gaubenwangen (Schlepp-, Satteldach-, Flachdachgaube) aus dem Aufmass rechnen, in Scharen mit Winkelstehfalz einteilen und Zuschnittmasse je Schar ausgeben.',
@@ -794,8 +1191,39 @@ export default {
                 if (!erg.r) return { thumbnail: '', text: 'Noch kein Aufmass' };
                 const w = erg.r.wange;
                 return { thumbnail: vorschauSvg(erg.r), text: `H ${fmt(w.H, 0)} · ${erg.r.scharen.length} Scharen` };
-            }
+            },
+            exports: { pdf: () => pdfErstellen() }
         });
+
+        async function pdfErstellen() {
+            const d = vervollstaendige(api.data.get());
+            const erg = rechneDaten(d);
+            if (!erg.r) {
+                api.ui.toast(erg.fehler ? `PDF nicht möglich: ${erg.fehler}` : `PDF nicht möglich, es fehlt noch: ${(erg.fehlt || []).join(', ')}`, 'warning', 5000);
+                return;
+            }
+            const JsPDF = api.libs.jsPDF;
+            if (!JsPDF) {
+                api.ui.toast('Die PDF-Bibliothek ist nicht geladen. Ohne Internet geht das PDF noch nicht.', 'warning', 6000);
+                return;
+            }
+            const wahl = await api.ui.prompt({
+                title: 'PDF Gaubenwange',
+                fields: [
+                    { key: 'seiten', label: 'Zuschnitte für', type: 'select', value: 'beide', options: [
+                        { value: 'beide', label: 'Beide Wangen' }, { value: 'L', label: 'Nur linke Wange' }, { value: 'R', label: 'Nur rechte Wange' }] },
+                    { key: 'rechenweg', label: 'Rechenweg und Proben anhängen', type: 'check', value: true }
+                ],
+                okLabel: 'PDF erstellen'
+            });
+            if (!wahl) return;
+            const projekt = api.project.get() || {};
+            const eintrag = (api.documents.entries() || []).find((x) => x.active);
+            const kopf = { ...projekt, gaube: projekt.profileName || (eintrag ? `Gaube ${eintrag.nr}` : 'Gaube') };
+            const jetzt = new Date();
+            const doc = pdfGaube(JsPDF, erg.r, kopf, { seiten: wahl.seiten, rechenweg: wahl.rechenweg, stellen: d.ansicht.stellen, datum: jetzt });
+            await api.ui.saveFile(pdfDateiname(kopf, jetzt), doc.output('blob'), 'application/pdf');
+        }
 
         api.on('document:loaded', () => {
             if (api.documents.current() === 'gaubenwange' && api.ui.currentTab() === tab.key) zeigen();
@@ -914,7 +1342,6 @@ export default {
                 </div>`;
         }
 
-        const konturFlaeche = (k) => Math.abs(k.reduce((t, p, i) => { const q = k[(i + 1) % k.length]; return t + p.u * q.v - q.u * p.v; }, 0) / 2);
 
         function ansichtHtml(r, a, f, st) {
             const seite = a.seite === 'R' ? 'R' : 'L';
@@ -957,16 +1384,7 @@ export default {
                     <p class="gw-hinweis">Rot gestrichelt: Biegelinien. Höhen am Zuschnitt inklusive Querfalz (oben ${fmt(z.querObenSenkrecht, 1)} mm, unten ${fmt(z.querUntenSenkrecht, 1)} mm senkrecht gemessen).</p>`;
             }
             if (a.reiter === 'weg') {
-                const z0 = r.scharen[0].zuschnitt;
-                const zeilen = [
-                    ...w.rechenweg,
-                    `Höhenabnahme je mm waagrecht: tan α − tan β = ${fmt(w.d, 5)}`,
-                    `Nahtlänge an der Stelle x: h(x) = H − x · ${fmt(w.d, 5)}`,
-                    `Querfalz oben senkrecht = ${fmt(z0.querOben, 1)} / cos ${fmt(w.beta, 2)}° = ${fmt(z0.querObenSenkrecht, 2)} mm`,
-                    `Querfalz unten senkrecht = ${fmt(z0.querUnten, 1)} / cos ${fmt(w.alpha, 2)}° = ${fmt(z0.querUntenSenkrecht, 2)} mm`,
-                    `Versatz unten = Zuschnittbreite · tan α, Versatz oben = Zuschnittbreite · tan β`,
-                    ...bandWeg(r)
-                ];
+                const zeilen = rechenwegZeilen(r);
                 return `<div class="gw-weg">
                     <b>Rechenweg</b><ol>${zeilen.map((t) => `<li>${esc(t)}</li>`).join('')}</ol>
                     <b>Proben</b><ol>${r.proben.map((p) => `<li class="${p.ok ? 'gw-probe-ok' : 'gw-probe-falsch'}">${p.ok ? '✓' : '✗'} ${esc(p.name)}</li>`).join('')}</ol>
