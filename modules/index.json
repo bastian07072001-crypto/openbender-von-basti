@@ -1,0 +1,9 @@
+{
+    "modules": [
+        {
+            "id": "beispiel",
+            "file": "beispiel/module.js",
+            "default": false
+        }
+    ]
+}

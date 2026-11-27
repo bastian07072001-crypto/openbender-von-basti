@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="de-CH">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>OpenBender</title>
+    <meta name="author" content="Nicolas Bühler">
+    <meta name="description" content="Ein browserbasierter Editor für Blechprofile — Profile zeichnen, Längen und Winkel exakt bearbeiten, Projekt-Daten und Zuschnitt-Liste erfassen,in 3D anschauen und als massgenaues DXF oder PDF Rüstauftrag ausgeben.">
+
+    <link rel="stylesheet" href="css/styles.css?v=0.26">
+
+    <!-- jsPDF für die PDF-Erstellung -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <!-- jsPDF AutoTable für einfache Tabellen -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+
+    <!-- Standard Favicons für Browser -->
+    <link rel="icon" type="image/svg+xml" href="icons/favicon.svg">
+    <link rel="icon" type="image/png" sizes="16x16" href="icons/openbender-icon-16.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="icons/openbender-icon-32.png">
+    <link rel="icon" type="image/png" sizes="96x96" href="icons/openbender-icon-96.png">
+
+    <!-- Apple Touch Icons (iOS Home-Bildschirm) -->
+    <link rel="apple-touch-icon" sizes="57x57" href="icons/openbender-icon-57.png">
+    <link rel="apple-touch-icon" sizes="60x60" href="icons/openbender-icon-60.png">
+    <link rel="apple-touch-icon" sizes="72x72" href="icons/openbender-icon-72.png">
+    <link rel="apple-touch-icon" sizes="76x76" href="icons/openbender-icon-76.png">
+    <link rel="apple-touch-icon" sizes="114x114" href="icons/openbender-icon-114.png">
+    <link rel="apple-touch-icon" sizes="120x120" href="icons/openbender-icon-120.png">
+    <link rel="apple-touch-icon" sizes="144x144" href="icons/openbender-icon-144.png">
+    <link rel="apple-touch-icon" sizes="152x152" href="icons/openbender-icon-152.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="icons/openbender-icon-180.png">
+</head>
+
+
+<body data-tab="profile">
+    <!-- Haupt-Navigation oben -->
+    <nav class="main-tabs">
+        <!-- lbl-long / lbl-short: volle Beschriftung, auf dem Handy die kurze -->
+        <button id="tab-btn-profile" title="Strg+1" class="main-tab-btn active"><span class="lbl-long">📐 Profil zeichnen</span><span class="lbl-short">📐 Profil</span></button>
+        <button id="tab-btn-cutlist" title="Strg+2" class="main-tab-btn"><span class="lbl-long">📋 Stückliste & Projekt</span><span class="lbl-short">📋 Liste</span></button>
+        <button id="tab-btn-zuschnitt" title="Strg+3" class="main-tab-btn"><span class="lbl-long">✂️ Zuschnitt</span><span class="lbl-short">✂️ Zuschnitt</span></button>
+        <button id="tab-btn-vorschau" title="Strg+4" class="main-tab-btn"><span class="lbl-long">🎲 3D Vorschau</span><span class="lbl-short">🎲 3D</span></button>
+    </nav>
+
+    <!-- Toolbar -->
+        <div id="toolbar">
+            <button id="btn-mode-line" title="Modus wechseln: Strg+A" class="active">Linie</button>
+            <button id="btn-mode-select" title="Modus wechseln: Strg+A"><span class="lbl-long">Auswahl / Verschieben</span><span class="lbl-short">Auswahl</span></button>
+            <button id="btn-profile-side" class="side-toggle hidden" title="Zwischen vorderem und hinterem Profilende wechseln">Profil: vorne</button>
+            <button id="btn-delete" title="Löschen (Entf)" aria-label="Löschen"><span class="lbl-long">Löschen</span><span class="lbl-short">🗑</span></button>
+            <button id="btn-undo" title="Rückgängig (Strg+Z)">↶</button>
+            <button id="btn-redo" title="Wiederholen (Strg+Y)">↷</button>
+            <!-- Datei: Neu, Öffnen, Speichern. Auf dem Handy im Menü "⋯" (siehe #mobile-menu).
+                 Name der offenen Datei und ungespeicherte Änderungen (●) stehen im Fenstertitel. -->
+            <span class="toolbar-group desktop-only">
+                <button id="btn-new" title="Neue Zeichnung (Alt+N)">Neu</button>
+                <button id="btn-import-json" title="Öffnen (Strg+O)">Öffnen</button>
+                <button id="btn-export-json" title="Speichern (Strg+S)">Speichern</button>
+            </span>
+            <!-- Vorlagen-Menü: Profil aus Vorlage, als Vorlage speichern (TemplateController) -->
+            <button id="btn-templates" class="desktop-only profile-doc-only" title="Profilvorlagen: verwenden oder aktuelles Profil als Vorlage speichern" aria-haspopup="true" aria-label="Vorlagen"><span class="lbl-long">📐 Vorlagen</span><span class="lbl-short">📐</span></button>
+            <span class="spacer desktop-only"></span>
+            <div class="zoom-group desktop-only">
+                <button id="btn-zoom-out" title="Herauszoomen (Strg+Minus)">−</button>
+                <button id="btn-zoom-fit" title="Ganzes Profil zeigen (Strg+0)" aria-label="Ganzes Profil zeigen">⤢</button>
+                <button id="btn-zoom-reset" title="Massstab 1:1">1:1</button>
+                <button id="btn-zoom-in" title="Hereinzoomen (Strg+Plus)">+</button>
+            </div>
+            <button id="btn-export-pdf" class="desktop-only" title="PDF ausgeben (Strg+P)">PDF</button>
+            <!-- <button id="btn-export-png">PNG</button> -->
+            <button id="btn-export-dxf" class="desktop-only" title="DXF exportieren (Strg+E)">DXF</button>
+            <button id="btn-more" class="mobile-only" title="Weitere Aktionen" aria-label="Weitere Aktionen" aria-haspopup="true">⋯</button>
+        </div>
+
+        <!-- Handy: Menü der ausgeblendeten Toolbar-Aktionen. data-click löst den
+             jeweiligen (versteckten) Toolbar-Button aus, damit die Logik an
+             einer Stelle bleibt. -->
+        <div id="mobile-menu" class="mobile-menu hidden" role="menu">
+            <button type="button" role="menuitem" data-action="profile" class="handy-only">☰ Profile des Projekts …</button>
+            <button type="button" role="menuitem" data-click="btn-new">Neu</button>
+            <button type="button" role="menuitem" data-action="fit">Ganzes Profil zeigen</button>
+            <button type="button" role="menuitem" data-click="btn-zoom-reset">Zoom 1:1</button>
+            <button type="button" role="menuitem" data-click="btn-export-pdf">PDF ausgeben</button>
+            <button type="button" role="menuitem" data-click="btn-export-dxf">DXF exportieren</button>
+            <button type="button" role="menuitem" data-click="btn-export-json">Speichern</button>
+            <button type="button" role="menuitem" data-click="btn-import-json">Öffnen</button>
+            <button type="button" role="menuitem" data-action="templates" class="profile-doc-only">📐 Vorlagen …</button>
+            <button type="button" role="menuitem" data-action="settings">⚙️ Einstellungen …</button>
+        </div>
+
+        <!-- Vorlagen-Menü (Inhalt von TemplateController) -->
+        <div id="template-menu" class="mobile-menu module-menu hidden" role="menu"></div>
+
+        <!-- Modul-Menü (Inhalt von ModuleUI.renderMenu) -->
+        <div id="module-menu" class="mobile-menu module-menu hidden" role="menu"></div>
+
+    <!-- Profile des Projekts (ProfileListController): Leiste links, zuklappbar; Handy: Einschub -->
+    <aside id="profil-leiste" class="profil-leiste" aria-label="Profile des Projekts">
+        <div class="pl-kopf">
+            <button type="button" data-aktion="zu" class="pl-toggle" title="Profilliste zuklappen" aria-expanded="true">◂</button>
+            <span class="pl-titel">Profile <span class="pl-anzahl"></span></span>
+        </div>
+        <div class="pl-liste"></div>
+        <div class="pl-fuss">
+            <button type="button" data-aktion="neu" class="pl-neu" title="Neues Blechprofil im Projekt"><span class="pl-plus">+</span><span class="pl-neu-text"> Neues Profil</span></button>
+        </div>
+    </aside>
+    <div id="profil-leiste-schleier" class="profil-leiste-schleier"></div>
+
+    <!-- 1. ANSICHT: Profil-Editor -->
+    <div id="view-profile" class="app-view active">
+
+        <!-- Hauptbereich: Canvas -->
+        <div id="main-area">
+            <!-- Canvas -->
+            <div id="canvas-container">
+                <canvas id="canvas"></canvas>
+
+                <!-- Inline-Eingabefeld zum Bearbeiten eines angeklickten Maß-/Winkel-Labels -->
+                <div id="label-edit-popup" class="label-edit-popup hidden">
+                    <input type="number" id="label-edit-input" inputmode="numeric" step="1">
+                    <span id="label-edit-unit" class="label-edit-unit">mm</span>
+                    <button type="button" id="label-edit-lock-btn" class="label-edit-lock-btn">🔓</button>
+                    <button type="button" id="label-edit-ok-btn" class="label-edit-ok-btn">✓</button>
+                </div>
+            </div>
+        </div>
+
+    </div> <!-- /#view-profile -->
+
+    <!-- Info-Panel: Version, Autor, Lizenz -->
+    <div id="info-panel-overlay" class="info-panel-overlay hidden">
+        <div class="info-panel">
+            <button type="button" id="info-panel-close" class="info-panel-close" aria-label="Schliessen">✕</button>
+            <h2>OpenBender</h2>
+            <p class="info-panel-version">Version <strong>0.26</strong> · BETA · 27.Nov. 2026</p>
+            <div class="info-panel-body">
+                <div class="info-panel-main">
+                    <p class="info-panel-desc">Browserbasierter Editor für Blechprofile — Profile zeichnen und exakt bemassen, auch konische und steckbare Profile, den Zuschnitt ab Rolle oder Tafel mit möglichst wenig Verschnitt planen, in 3D prüfen und als massgenaues DXF oder PDF-Rüstauftrag ausgeben. Läuft auf PC, Tablet und Handy. Entwickelt mithilfe von Claude Code, gedacht als reine browserbasierte Applikation, um betriebssystemunabhängig genutzt werden zu können.</p>
+                    <dl class="info-panel-meta">
+                        <dt>Autor</dt><dd>Nicolas Bühler</dd>
+                        <dt>Lizenz</dt><dd>MIT</dd>
+                    </dl>
+                </div>
+            </div>
+
+            <p class="info-panel-hint">Speicherordner, Module, Materialien und Tastenkürzel: <button type="button" id="info-open-settings" class="status-btn">⚙️ Einstellungen</button></p>
+        </div>
+    </div>
+
+    <!-- Einstellungen (SettingsController): Allgemein, Module, Material, Shortcuts -->
+    <div id="settings-overlay" class="info-panel-overlay hidden">
+        <div class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+            <div class="settings-header">
+                <h2 id="settings-title">Einstellungen</h2>
+                <button type="button" id="settings-close" class="info-panel-close" aria-label="Schliessen">✕</button>
+            </div>
+            <nav class="settings-tabs" role="tablist">
+                <button type="button" role="tab" data-tab="allgemein" class="active">Allgemein</button>
+                <button type="button" role="tab" data-tab="module">Module</button>
+                <button type="button" role="tab" data-tab="material">Material</button>
+                <button type="button" role="tab" data-tab="shortcuts">Shortcuts</button>
+            </nav>
+            <div class="settings-body">
+                <section class="settings-page active" data-page="allgemein" role="tabpanel">
+                    <h3>Ablage</h3>
+                    <div class="opt-row" id="opt-folder-row">
+                        <span class="opt-label">Speicherordner</span>
+                        <span id="opt-folder-name" class="opt-value">–</span>
+                        <button type="button" id="opt-folder-choose" class="status-btn">Ordner wählen</button>
+                    </div>
+                    <p id="opt-folder-note" class="opt-note"></p>
+                </section>
+                <section class="settings-page" data-page="module" role="tabpanel"></section>
+                <section class="settings-page" data-page="material" role="tabpanel"></section>
+                <section class="settings-page" data-page="shortcuts" role="tabpanel">
+                    <h3>Tastenkürzel</h3>
+                    <div class="settings-shortcuts">
+                        <dl>
+                            <dt><kbd>Alt</kbd>+<kbd>N</kbd></dt><dd>Neue Zeichnung</dd>
+                            <dt><kbd>Strg</kbd>+<kbd>A</kbd></dt><dd>Modus wechseln</dd>
+                            <dt><kbd>Entf</kbd></dt><dd>Auswahl löschen</dd>
+                            <dt><kbd>Strg</kbd>+<kbd>Z</kbd> / <kbd>Y</kbd></dt><dd>Rückgängig / Wiederholen</dd>
+                            <dt><kbd>Strg</kbd>+<kbd>+</kbd> / <kbd>−</kbd></dt><dd>Herein- / Herauszoomen</dd>
+                            <dt><kbd>Strg</kbd>+<kbd>0</kbd></dt><dd>Ganzes Profil zeigen</dd>
+                            <dt><kbd>Strg</kbd>+<kbd>P</kbd></dt><dd>PDF ausgeben</dd>
+                            <dt><kbd>Strg</kbd>+<kbd>E</kbd></dt><dd>DXF exportieren</dd>
+                            <dt><kbd>Strg</kbd>+<kbd>S</kbd></dt><dd>Speichern (JSON)</dd>
+                            <dt><kbd>Strg</kbd>+<kbd>O</kbd></dt><dd>Öffnen (JSON)</dd>
+                            <dt><kbd>Strg</kbd>+<kbd>1</kbd> … <kbd>4</kbd></dt><dd>Profil / Stückliste / Zuschnitt / 3D Vorschau</dd>
+                            <dt><kbd>Strg</kbd>+<kbd>5</kbd> …</dt><dd>Tabs der Module (z.B. Biegefolge), von links nach rechts</dd>
+                            <dt><kbd>Esc</kbd></dt><dd>Fenster schliessen</dd>
+                        </dl>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </div>
+
+    <!-- Datei-Browser: Öffnen / Speichern im Speicherordner (FileBrowserController) -->
+    <div id="file-browser-overlay" class="info-panel-overlay hidden">
+        <div class="file-browser" role="dialog" aria-modal="true" aria-labelledby="fb-title">
+            <div class="fb-header">
+                <h2 id="fb-title">Öffnen</h2>
+                <input type="search" id="fb-filter" class="fb-filter" placeholder="Suchen …" aria-label="Dateien suchen">
+                <button type="button" id="fb-new-folder" class="dxf-btn">+ Neuer Ordner</button>
+                <button type="button" id="fb-close" class="info-panel-close fb-close" aria-label="Schliessen">✕</button>
+            </div>
+            <nav id="fb-breadcrumb" class="fb-breadcrumb" aria-label="Ordnerpfad"></nav>
+            <div id="fb-body" class="fb-body"></div>
+            <div class="fb-footer">
+                <div id="fb-savebar" class="fb-savebar hidden">
+                    <label for="fb-filename">Dateiname</label>
+                    <input type="text" id="fb-filename" class="fb-filename" autocomplete="off">
+                    <span class="fb-ext">.json</span>
+                    <button type="button" id="fb-save" class="dxf-btn dxf-btn-primary">Speichern</button>
+                </div>
+                <a href="#" id="fb-classic" class="fb-classic">Stattdessen Datei vom Gerät wählen</a>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- DXF-Export eines konischen Profils: 2D oder 3D-Drahtmodell -->
+    <div id="dxf-dialog-overlay" class="info-panel-overlay hidden">
+        <div class="info-panel dxf-dialog">
+            <button type="button" id="dxf-dialog-close" class="info-panel-close" aria-label="Schliessen">✕</button>
+            <h2>DXF-Export</h2>
+            <p class="info-panel-desc">Konisches Profil – welche Ausgabe?</p>
+            <label class="dxf-option">
+                <input type="radio" name="dxf-mode" value="2d" checked>
+                <span><strong>2D</strong> – vorne und hinten nebeneinander, beschriftet (für alle CAD-Programme)</span>
+            </label>
+            <label class="dxf-option">
+                <input type="radio" name="dxf-mode" value="3d">
+                <span><strong>3D-Drahtmodell</strong> – vorne und hinten im Abstand der Blechlänge, verbunden durch die Kanten</span>
+            </label>
+            <div id="dxf-length-row" class="dxf-length-row">
+                <label for="sel-dxf-position">Länge:</label>
+                <select id="sel-dxf-position"></select>
+            </div>
+            <div class="dxf-actions">
+                <button type="button" id="dxf-dialog-cancel" class="dxf-btn">Abbrechen</button>
+                <button type="button" id="dxf-dialog-export" class="dxf-btn dxf-btn-primary">Exportieren</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 2. ANSICHT: Stückliste & Projektdaten -->
+    <div id="view-cutlist" class="app-view">
+        <div id="cutlist-scroll-wrapper" class="cutlist-scroll-area">
+        <div class="cutlist-container">
+
+           <!-- Kopfdaten-Formular -->
+            <div class="project-header-grid">
+                <div class="form-group">
+                    <label for="project-number">Projekt-Nr. / Kürzel</label>
+                    <input type="text" id="project-number" placeholder="z.B. PRJ-2026-001">
+                </div>
+                <div class="form-group">
+                    <label for="project-name">Projekt-Name</label>
+                    <input type="text" id="project-name" placeholder="z.B. EFH Müller - Dachrand">
+                </div>
+                <div class="form-group">
+                    <label for="project-author">Autor / Zeichner</label>
+                    <input type="text" id="project-author" placeholder="z.B. Max Mustermann">
+                </div>
+                <div class="form-group">
+                    <label for="profile-name">Blechprofil-Name</label>
+                    <input type="text" id="profile-name" placeholder="z.B. Ortgangblech Typ A">
+                </div>
+                <div class="form-group">
+                    <label for="material-type">Material</label>
+                    <!-- Einträge aus der Materialliste (ProjectController.renderMaterialOptions) -->
+                    <select id="material-type">
+                        <option value="">-- Material wählen --</option>
+                    </select>
+                </div>
+                <div class="form-group" id="group-material-spec" style="display: none;">
+                    <label for="material-spec">Material-Spezifikation</label>
+                    <select id="material-spec">
+                        <!-- Wird dynamisch per JS befüllt -->
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="material-thickness">Materialstärke (mm)</label>
+                    <!-- Nur lieferbare Dicken aus dem Rollen- und Tafel-Sortiment (CoilCatalog.js) -->
+                    <select id="material-thickness" disabled>
+                        <option value="">-- zuerst Material wählen --</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="material-color">Farbe / Beschichtung</label>
+                    <input type="text" id="material-color" placeholder="z.B. RAL 7016">
+                </div>
+            </div>
+
+            <!-- Summen (der Knopf „+ Neue Position“ steht unter der Liste) -->
+            <div class="cutlist-actions">
+                <div class="summary-badge">
+                    <span>Gesamt: <strong id="summary-total-lfm">0.00 lfm</strong> | <strong id="summary-total-sqm">0.00 m²</strong></span>
+                    <span id="summary-waste" class="summary-waste hidden">davon Verschnitt 0.00 m²</span>
+                </div>
+            </div>
+
+            <!-- Große Touch-Tabelle -->
+            <div class="table-responsive">
+                <table class="touch-table" id="cutlist-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 80px;">Pos.</th>
+                            <th>Zuschnittlänge (m)</th>
+                            <th style="width: 180px;">Stückzahl</th>
+                            <th style="width: 120px;">Steckbar</th>
+                            <th>Anmerkung</th>
+                            <th style="width: 60px;"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="cutlist-body">
+                        <!-- Tabellenzeilen werden dynamisch per JS eingefügt -->
+                    </tbody>
+                </table>
+                <!-- unter der Liste: bei langen Listen muss man nicht hochscrollen -->
+                <div class="cutlist-add">
+                    <button id="btn-add-row" class="btn-primary-touch">+ Neue Position</button>
+                </div>
+                <div style="height:300px"></div><!-- Platzhalter fürs Scrolling -->
+            </div>
+        </div>
+        </div>
+    </div>
+
+    <!-- Tab View Container -->
+    <!-- 4. ANSICHT: Zuschnitt-Optimierung (Rollen- und Tafelware) -->
+    <div id="view-zuschnitt" class="app-view">
+        <div class="cutlist-scroll-area">
+        <div class="cutlist-container">
+
+            <!-- Noch nichts zuzuschneiden: Hinweis mit dem nächsten Schritt (CuttingController.renderLeer) -->
+            <div class="cut-card cut-leer hidden" id="cut-leer"></div>
+
+            <!-- Panels als Akkordeon (details/summary), Zustand merkt sich CuttingController -->
+            <details class="cut-card" id="cut-panel-coil" open>
+                <summary><h3 id="cut-stock-title">Rolle wählen</h3></summary>
+                <div class="cut-settings">
+                    <div class="cut-stock" role="radiogroup" aria-label="Ware">
+                        <label><input type="radio" name="cut-stock" value="coil" checked><span>Rollenware</span></label>
+                        <label><input type="radio" name="cut-stock" value="sheet"><span>Tafelware</span></label>
+                    </div>
+                    <div class="form-group">
+                        <label for="cut-sort">Sorte</label>
+                        <select id="cut-sort"></select>
+                    </div>
+                    <div id="cut-material-info" class="cut-material-info"></div>
+                    <!-- nur wenn weitere Profile des Projekts das gleiche Material haben -->
+                    <label class="toggle-option hidden" id="cut-gruppe-row">
+                        <input type="checkbox" id="chk-cut-gruppe">
+                        <span id="cut-gruppe-text">Profile mit gleichem Material gemeinsam zuschneiden</span>
+                    </label>
+                    <label class="toggle-option" id="cut-nest-row">
+                        <input type="checkbox" id="chk-cut-nest">
+                        Konische Teile paarweise verschachteln (gemeinsamer Schrägschnitt)
+                    </label>
+                    <!-- erp-feature: erst mit der ERPNext-Einbindung sichtbar (CuttingController) -->
+                    <label class="toggle-option erp-feature hidden">
+                        <input type="checkbox" id="chk-cut-dispose">
+                        Abschnitte entsorgen
+                    </label>
+                </div>
+                <div class="table-responsive">
+                    <table class="cut-compare">
+                        <!-- Kopfzeile je nach Rollen-/Tafelware (CuttingController) -->
+                        <thead id="cut-compare-head"></thead>
+                        <tbody id="cut-compare-body"></tbody>
+                    </table>
+                </div>
+                <div class="cut-custom" id="cut-custom-coil">
+                    <label for="cut-custom-width">Eigene Rollenbreite (z.B. Lager-Rest):</label>
+                    <input type="number" id="cut-custom-width" min="1" step="1" inputmode="numeric" placeholder="mm">
+                </div>
+                <div class="cut-custom hidden" id="cut-custom-sheet">
+                    <label for="cut-custom-sheet-width">Eigenes Tafelmass (z.B. Lager-Rest):</label>
+                    <input type="number" id="cut-custom-sheet-width" min="1" step="1" inputmode="numeric" placeholder="Breite mm" aria-label="Tafelbreite in mm">
+                    <span>×</span>
+                    <input type="number" id="cut-custom-sheet-length" min="1" step="1" inputmode="numeric" placeholder="Länge mm" aria-label="Tafellänge in mm">
+                </div>
+            </details>
+
+            <details class="cut-card" id="cut-panel-plan" open>
+                <summary><h3>Zuschnitt-Plan</h3></summary>
+                <div id="cut-summary"></div>
+                <div id="cut-graphic" class="cut-graphic"></div>
+            </details>
+
+            <details class="cut-card" id="cut-panel-list" open>
+                <summary><h3>Zuschnittliste <span id="cut-progress" class="cut-progress"></span></h3></summary>
+                <div class="table-responsive">
+                    <table class="touch-table cut-list">
+                        <thead>
+                            <tr>
+                                <th style="width: 60px;">✓</th>
+                                <th>Pos.</th>
+                                <th id="cut-list-lane-head">Streifen</th>
+                                <th>Länge</th>
+                                <th>Zuschnitt</th>
+                            </tr>
+                        </thead>
+                        <tbody id="cut-list-body"></tbody>
+                    </table>
+                </div>
+            </details>
+
+            <details class="cut-card erp-feature hidden" id="cut-panel-signoff" open>
+                <summary><h3>Quittierung</h3></summary>
+                <div id="cut-signoff"></div>
+            </details>
+
+        </div>
+        </div>
+    </div>
+
+    <div id="view-vorschau" class="tab-view">
+        <!-- Leiste der 3D-Ansicht: Bemassung ein/aus, Blechlänge aus der Stückliste -->
+        <div id="preview-toolbar" class="preview-toolbar">
+            <label class="toggle-option">
+                <input type="checkbox" id="chk-3d-dimensions" checked>
+                Masse anzeigen
+            </label>
+            <span class="status-divider">|</span>
+            <label class="preview-length" for="sel-3d-position">Länge:</label>
+            <select id="sel-3d-position"></select>
+        </div>
+        <div id="three-container" style="width: 100%;"></div>
+    </div>
+
+    <!-- Statusleiste: unter allen Tabs. Profil-Optionen (.profile-tab-only) nur im Tab „Profil zeichnen“ -->
+    <div id="status-bar">
+        <div class="info-group profile-tab-only">
+            <label class="toggle-option">
+                <input type="checkbox" id="chk-show-dimensions" checked>
+                Masse & Winkel anzeigen
+            </label>
+            <span class="status-divider">|</span>
+            <label class="toggle-option">
+                <input type="checkbox" id="chk-conical">
+                Konisches Profil
+            </label>
+            <button type="button" id="btn-plug-auto" class="status-btn" title="Hinteres Ende als weites Steckstück berechnen (Materialstärke aus den Projektdaten)">Automatisch steckbar</button>
+            <button type="button" id="btn-swap-ends" class="status-btn hidden" title="Vorderes und hinteres Profil tauschen (alle Masse bleiben erhalten)">Profilseite wechseln</button>
+        </div>
+        <span class="status-divider desktop-only profile-tab-only">|</span>
+        <span id="total-length-display" class="total-length profile-tab-only">Abwicklung: <strong>0 mm</strong></span>
+        <div class="status-end">
+            <!-- Handy: Optionen (.info-group) als Feld über der Leiste -->
+            <button type="button" id="btn-options" class="info-btn mobile-only profile-tab-only" title="Profil-Optionen" aria-label="Profil-Optionen" aria-expanded="false">⋮</button>
+            <button type="button" id="btn-settings" class="info-btn" title="Einstellungen" aria-label="Einstellungen">⚙️</button>
+            <button type="button" id="btn-info" class="info-btn" title="Info & Version" aria-label="Info & Version">ℹ️</button>
+        </div>
+    </div>
+
+    <div id="toast-container" class="toast-container"></div>
+    <input type="file" id="file-input-json" accept=".json" style="display: none;">
+    <script type="module" src="js/main.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- OrbitControls für Kamera-Drehung mit der Maus -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</body>
+</html>
