@@ -1,0 +1,65 @@
+{
+    "hinweis": "Prüffälle für den Gaubenwangen-Rechenkern. Gemeinsame Eingabe für den JS-Rechenkern und die Python-Zweitrechnung. Längen in mm, Winkel in Grad.",
+    "faelle": [
+        {
+            "name": "A Referenz-Testgaube (SpenglerTV), Schar 52 cm von vorne",
+            "eingabe": { "art": "schlepp", "eingabeart": "referenz", "H": 1200, "so": 3500, "schmiege": 45 },
+            "einstellungen": { "regel": "vonVorne", "scharbreite": 520 }
+        },
+        {
+            "name": "A2 Referenz-Testgaube als drei Längen",
+            "eingabe": { "art": "schlepp", "eingabeart": "laengen", "H": 1200, "su": 4244.1135, "so": 3500 },
+            "einstellungen": { "regel": "vonVorne", "scharbreite": 520 }
+        },
+        {
+            "name": "A3 Referenz-Testgaube gleichmässig",
+            "eingabe": { "art": "schlepp", "eingabeart": "referenz", "H": 1200, "so": 3500, "schmiege": 45 },
+            "einstellungen": { "regel": "gleichmaessig", "scharbreite": 520 }
+        },
+        {
+            "name": "B Schleppgaube 45/15, gleichmässig 500",
+            "eingabe": { "art": "schlepp", "eingabeart": "winkel", "H": 1200, "alpha": 45, "beta": 15 },
+            "einstellungen": { "regel": "gleichmaessig", "scharbreite": 500 }
+        },
+        {
+            "name": "B2 Schleppgaube 45/15, von vorne 500",
+            "eingabe": { "art": "schlepp", "eingabeart": "winkel", "H": 1200, "alpha": 45, "beta": 15 },
+            "einstellungen": { "regel": "vonVorne", "scharbreite": 500 }
+        },
+        {
+            "name": "C Satteldachgaube 38°, H 900",
+            "eingabe": { "art": "sattel", "eingabeart": "winkel", "H": 900, "alpha": 38, "beta": 0 },
+            "einstellungen": { "regel": "vonVorne", "scharbreite": 500 }
+        },
+        {
+            "name": "C2 Satteldachgaube als drei Längen",
+            "eingabe": { "art": "sattel", "eingabeart": "laengen", "H": 900, "su": 1461.84, "so": 1151.95 },
+            "einstellungen": { "regel": "gleichmaessig", "scharbreite": 450 }
+        },
+        {
+            "name": "D flache Schleppgaube 30/8 über Tiefe",
+            "eingabe": { "art": "schlepp", "eingabeart": "tiefe", "H": 1000, "L": 2289.33, "alpha": 30 },
+            "einstellungen": { "regel": "vonVorne", "scharbreite": 600 }
+        },
+        {
+            "name": "E Flachdachgaube mit Gefälle, steiles Hauptdach",
+            "eingabe": { "art": "flach", "eingabeart": "laengen", "H": 1350, "su": 2160, "so": 1520 },
+            "einstellungen": { "regel": "gleichmaessig", "scharbreite": 600 }
+        },
+        {
+            "name": "F kleine Gaube, eine einzige Schar",
+            "eingabe": { "art": "schlepp", "eingabeart": "winkel", "H": 300, "alpha": 50, "beta": 20 },
+            "einstellungen": { "regel": "vonVorne", "scharbreite": 600 }
+        },
+        {
+            "name": "G Raster 5 mm, ungerade Breite",
+            "eingabe": { "art": "schlepp", "eingabeart": "laengen", "H": 1475, "su": 3870, "so": 3010 },
+            "einstellungen": { "regel": "gleichmaessig", "scharbreite": 540, "raster": 5 }
+        },
+        {
+            "name": "H andere Zugaben (Schablone 46/38, Querfalz 20/12)",
+            "eingabe": { "art": "schlepp", "eingabeart": "winkel", "H": 1100, "alpha": 42, "beta": 12 },
+            "einstellungen": { "regel": "vonVorne", "scharbreite": 480, "zugabeFront": 46, "zugabeSpitze": 38, "zugabeErsteFront": 38, "querOben": 20, "querUnten": 12 }
+        }
+    ]
+}

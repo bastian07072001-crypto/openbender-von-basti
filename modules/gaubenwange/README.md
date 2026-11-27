@@ -1,0 +1,29 @@
+# Modul Gaubenwange
+
+Rechner für Gaubenwangen (Schlepp-, Satteldach- und Flachdachgaube): Wangendreieck aus dem Aufmass, Einteilung in senkrechte Scharen mit Winkelstehfalz, Zuschnittmasse mit Falz- und Querfalzzugaben, linke und gespiegelte rechte Wange.
+
+**Stand: Etappe 1 – nur Rechenkern.** Noch keine Oberfläche, das Modul ist nicht in `modules/index.json` eingetragen und wird von der App nicht geladen.
+
+## Prüfen
+
+Im Repository-Ordner:
+
+```
+node --test tests/gaubenwange/rechnung.test.mjs
+```
+
+Wurde `tests/gaubenwange/faelle.json` geändert, vorher die unabhängige Zweitrechnung neu erzeugen:
+
+```
+python3 tests/gaubenwange/zweitrechnung.py
+```
+
+Die Tests prüfen jeden Fall gegen die Python-Zweitrechnung (anderer Rechenweg, Toleranz 0,001 mm), gegen die Handrechnung aus dem Plan und gegen die Zahlen der SpenglerTV-Testgaube.
+
+## Festlegungen (Bastian, 27.11.2026)
+
+- Aufmass: drei Längen netto (Höhe vorne = fertige Nahtlänge, Unterkante, Oberkante), alles in mm
+- Winkelstehfalz: 45 mm zur Gaubenfront, 35 mm zur Spitze; erste Schar beidseitig 35 mm
+- Querfalz oben und unten je 15 mm, rechtwinklig zur Schnittkante (senkrecht also 15 / cos)
+- Scharbreite = Achsmass Falz zu Falz; Einteilung gleichmässig oder von vorne
+- Restschar unter 100 mm Breite: Warnung
